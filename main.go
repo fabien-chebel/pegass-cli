@@ -11,15 +11,8 @@ var pegassClient = PegassClient{}
 
 func main() {
 	app := cli.NewApp()
-	app.Name = "Hello_Cli"
-	app.Usage = "Print hello world"
-	app.Flags = []cli.Flag{
-		cli.StringFlag{
-			Name:  "name, n",
-			Value: "World",
-			Usage: "Who to say hello to.",
-		},
-	}
+	app.Name = "Pegass CLI"
+	app.Usage = "Interact with Red Cross's Pegass web app through the CLI"
 
 	app.Commands = []cli.Command{
 		{
@@ -32,7 +25,7 @@ func main() {
 			},
 		},
 		{
-			Name: "whoami",
+			Name:  "whoami",
 			Usage: "Get current user information",
 			Action: func(c *cli.Context) error {
 				pegassClient.ReAuthenticate()
@@ -41,9 +34,7 @@ func main() {
 			},
 		},
 	}
-
 	app.Run(os.Args)
-
 }
 
 func parseConfig() Config {
