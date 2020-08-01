@@ -13,3 +13,10 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# IDE configuration
+.idea
+
+# Application configuration file
+config.json
+auth-ticket.json
