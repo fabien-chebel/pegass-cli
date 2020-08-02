@@ -84,8 +84,15 @@ tokenLoop:
 	}
 	defer authentRequest.Body.Close()
 
-	pegassUrl, _ := url.Parse("https://pegass.croix-rouge.fr")
-	pegassCookie := pegassClient.cookieJar.Cookies(pegassUrl)[0]
+	pegassUrl, err := url.Parse("https://pegass.croix-rouge.fr")
+	if err != nil {
+		log.Fatal("Failed to parse pegass URL", err)
+	}
+	pegassCookies := pegassClient.cookieJar.Cookies(pegassUrl)
+	if len(pegassCookies) != 1 {
+		log.Fatal("Error: expected to find a single Cookie for Pegass domain")
+	}
+	pegassCookie := pegassCookies[0]
 
 	cookieName := pegassCookie.Name
 	cookieValue := pegassCookie.Value
@@ -122,8 +129,8 @@ func (pegassClient *PegassClient) ReAuthenticate() {
 	pegassUrl, _ := url.Parse("https://pegass.croix-rouge.fr")
 
 	cookies := []*http.Cookie{{
-		Name:       authTicket.CookieName,
-		Value:      authTicket.CookieValue,
+		Name:  authTicket.CookieName,
+		Value: authTicket.CookieValue,
 	}}
 	jar.SetCookies(pegassUrl, cookies)
 
