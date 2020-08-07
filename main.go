@@ -20,7 +20,10 @@ func main() {
 			Usage: "Authenticate to Pegass",
 			Action: func(c *cli.Context) error {
 				configData := parseConfig()
-				pegassClient.Authenticate(configData.Username, configData.Password)
+				err := pegassClient.Authenticate(configData.Username, configData.Password)
+				if err != nil {
+					return err
+				}
 				return nil
 			},
 		},
@@ -28,8 +31,14 @@ func main() {
 			Name:  "whoami",
 			Usage: "Get current user information",
 			Action: func(c *cli.Context) error {
-				pegassClient.ReAuthenticate()
-				pegassClient.GetCurrentUser()
+				err := pegassClient.ReAuthenticate()
+				if err != nil {
+					return err
+				}
+				err = pegassClient.GetCurrentUser()
+				if err != nil {
+					return err
+				}
 				return nil
 			},
 		},
