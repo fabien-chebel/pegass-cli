@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"golang.org/x/net/html"
 	"io/ioutil"
 	"log"
@@ -15,12 +17,13 @@ type PegassClient struct {
 	cookieJar *cookiejar.Jar
 }
 
-func (pegassClient *PegassClient) Authenticate(username string, password string) {
+func (pegassClient *PegassClient) Authenticate(username string, password string) error {
+
 	if pegassClient.cookieJar == nil {
 		jar, err := cookiejar.New(nil)
 		pegassClient.cookieJar = jar
 		if err != nil {
-			log.Fatal("Failed to create cookie jar", err)
+			return fmt.Errorf("failed to create cookie jar: %w", err)
 		}
 	}
 
@@ -30,12 +33,12 @@ func (pegassClient *PegassClient) Authenticate(username string, password string)
 
 	get, err := client.Get("https://pegass.croix-rouge.fr/")
 	if err != nil {
-		log.Fatal("Failed to process request", err)
+		return fmt.Errorf("failed to process request: %w", err)
 	}
 	defer get.Body.Close()
 	_, err = ioutil.ReadAll(get.Body)
 	if err != nil {
-		log.Fatal("Failed to access Pegass", err)
+		return fmt.Errorf("failed to access Pegass: %w", err)
 	}
 
 	formRequest, err := client.PostForm("https://id.authentification.croix-rouge.fr/my.policy", url.Values{
@@ -45,7 +48,7 @@ func (pegassClient *PegassClient) Authenticate(username string, password string)
 	})
 
 	if err != nil {
-		log.Fatal("Failed to authenticate to Pegass", err)
+		return fmt.Errorf("failed to authenticate to Pegass: %w", err)
 	}
 	defer formRequest.Body.Close()
 	var samlResponseToken string
@@ -73,19 +76,26 @@ tokenLoop:
 	}
 
 	if samlResponseToken == "" {
-		log.Fatal("Failed to parse SAML Response token")
+		return errors.New("failed to parse SAML Response token")
 	}
 
 	authentRequest, err := client.PostForm("https://pegass.croix-rouge.fr/Shibboleth.sso/SAML2/POST", url.Values{
 		"SAMLResponse": {samlResponseToken},
 	})
 	if err != nil {
-		log.Fatal("Failed to authenticate on Pegass", err)
+		return fmt.Errorf("failed to authenticate on Pegass: %w", err)
 	}
 	defer authentRequest.Body.Close()
 
-	pegassUrl, _ := url.Parse("https://pegass.croix-rouge.fr")
-	pegassCookie := pegassClient.cookieJar.Cookies(pegassUrl)[0]
+	pegassUrl, err := url.Parse("https://pegass.croix-rouge.fr")
+	if err != nil {
+		return fmt.Errorf("failed to parse pegass URL: %w", err)
+	}
+	pegassCookies := pegassClient.cookieJar.Cookies(pegassUrl)
+	if len(pegassCookies) != 1 {
+		return errors.New("error: expected to find a single Cookie for Pegass domain")
+	}
+	pegassCookie := pegassCookies[0]
 
 	cookieName := pegassCookie.Name
 	cookieValue := pegassCookie.Value
@@ -96,57 +106,62 @@ tokenLoop:
 
 	fileContent, err := json.MarshalIndent(ticket, "", "")
 	if err != nil {
-		log.Fatal("Failed to serialize authentication data", err)
+		return fmt.Errorf("failed to serialize authentication data: %w", err)
 	}
 	err = ioutil.WriteFile("auth-ticket.json", fileContent, 0700)
 	if err != nil {
-		log.Fatal("Failed to save authentication data to file", err)
+		return fmt.Errorf("failed to save authentication data to file: %w", err)
 	}
 
 	log.Println("Authentication succeeded.")
+	return nil
 }
 
-func (pegassClient *PegassClient) ReAuthenticate() {
+func (pegassClient *PegassClient) ReAuthenticate() error {
 	file, err := os.Open("auth-ticket.json")
 	if err != nil {
-		log.Fatal("Failed to read authentication ticket file", err)
+		return fmt.Errorf("failed to read authentication ticket file: %w", err)
 	}
 
 	var authTicket = AuthTicket{}
 	err = json.NewDecoder(file).Decode(&authTicket)
 	if err != nil {
-		log.Fatal("Failed to deserialize authentication data", err)
+		return fmt.Errorf("failed to deserialize authentication data: %w", err)
 	}
 
 	jar, _ := cookiejar.New(nil)
-	pegassUrl, _ := url.Parse("https://pegass.croix-rouge.fr")
+	pegassUrl, err := url.Parse("https://pegass.croix-rouge.fr")
+	if err != nil {
+		return fmt.Errorf("failed to parse pegass url: %w", err)
+	}
 
 	cookies := []*http.Cookie{{
-		Name:       authTicket.CookieName,
-		Value:      authTicket.CookieValue,
+		Name:  authTicket.CookieName,
+		Value: authTicket.CookieValue,
 	}}
 	jar.SetCookies(pegassUrl, cookies)
 
 	pegassClient.cookieJar = jar
+	return nil
 }
 
-func (pegassClient PegassClient) GetCurrentUser() {
+func (pegassClient PegassClient) GetCurrentUser() error {
 	var httpClient = http.Client{
 		Jar: pegassClient.cookieJar,
 	}
 
 	getRequest, err := httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/gestiondesdroits")
 	if err != nil {
-		log.Fatal("Failed to create request to Pegass 'gestiondesdroits' endpoint", err)
+		return fmt.Errorf("failed to create request to Pegass 'gestiondesdroits' endpoint: %w", err)
 	}
 	defer getRequest.Body.Close()
 
-	var utilisateur = GestionDesDroits{}
-	err = json.NewDecoder(getRequest.Body).Decode(&utilisateur)
+	var user = GestionDesDroits{}
+	err = json.NewDecoder(getRequest.Body).Decode(&user)
 	if err != nil {
-		log.Fatal("Failed to unmarshal response from Pegass", err)
+		return fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
 	}
 
-	log.Printf("Bonjour %s %s (NIVOL: %s) !", utilisateur.Utilisateur.Prenom, utilisateur.Utilisateur.Nom, utilisateur.Utilisateur.Id)
-
+	log.Printf("Bonjour %s %s (NIVOL: %s) !", user.Utilisateur.Prenom, user.Utilisateur.Nom, user.Utilisateur.Id)
+	return nil
 }
