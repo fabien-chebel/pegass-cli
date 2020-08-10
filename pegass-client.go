@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	redcross "github.com/fabien-chebel/pegass-cli/redcross"
 	"golang.org/x/net/html"
 	"io/ioutil"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"strconv"
 )
 
 type PegassClient struct {
@@ -145,23 +147,107 @@ func (pegassClient *PegassClient) ReAuthenticate() error {
 	return nil
 }
 
-func (pegassClient PegassClient) GetCurrentUser() error {
+func (pegassClient PegassClient) GetCurrentUser() (redcross.GestionDesDroits, error) {
+	var user = redcross.GestionDesDroits{}
 	var httpClient = http.Client{
 		Jar: pegassClient.cookieJar,
 	}
 
 	getRequest, err := httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/gestiondesdroits")
 	if err != nil {
-		return fmt.Errorf("failed to create request to Pegass 'gestiondesdroits' endpoint: %w", err)
+		return user, fmt.Errorf("failed to create request to Pegass 'gestiondesdroits' endpoint: %w", err)
 	}
 	defer getRequest.Body.Close()
 
-	var user = GestionDesDroits{}
 	err = json.NewDecoder(getRequest.Body).Decode(&user)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
+		return user, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
 	}
 
-	log.Printf("Bonjour %s %s (NIVOL: %s) !", user.Utilisateur.Prenom, user.Utilisateur.Nom, user.Utilisateur.Id)
-	return nil
+	return user, nil
+}
+
+func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBenevole, error) {
+	var stats = redcross.StatsBenevole{}
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	startDate := "2020-01-01"
+	endDate := "2020-08-31"
+
+	requestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/statistiques/benevole/%s/%s/%s/quantite", nivol, startDate, endDate)
+	getRequest, err := httpClient.Get(requestURI)
+	if err != nil {
+		return stats, fmt.Errorf("failed to create request to pegass 'statistiques benevole' endpoint: %w", err)
+	}
+	defer getRequest.Body.Close()
+
+	stats = redcross.StatsBenevole{}
+	err = json.NewDecoder(getRequest.Body).Decode(&stats)
+	if err != nil {
+		return stats, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
+	}
+
+	return stats, nil
+}
+
+func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error) {
+	const DISPATCHER_ROLE_ID = "18"
+
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/utilisateur")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse url to pegass: %w", err)
+	}
+
+	query := parse.Query()
+	query.Add("pageInfo", "true")
+	query.Add("perPage", "11")
+	query.Add("role", DISPATCHER_ROLE_ID)
+	query.Add("searchType", "benevoles")
+	query.Add("withMoyensCom", "true")
+	query.Add("zoneGeoId", "92")
+	query.Add("zoneGeoType", "departement")
+	currentPage := 0
+	currentPageAsString := strconv.Itoa(currentPage)
+	query.Add("page", currentPageAsString)
+
+	parse.RawQuery = query.Encode()
+
+	var dispatchers []redcross.Utilisateur
+
+	for allResultsAreIn := false; !allResultsAreIn; {
+		getRequest, err := httpClient.Get(parse.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request to pegass 'recherche utilisateur' endpoint: %w", err)
+		}
+		defer getRequest.Body.Close()
+
+		var rechercheBenevoles = redcross.RechercheBenevoles{}
+		err = json.NewDecoder(getRequest.Body).Decode(&rechercheBenevoles)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal search results: %w", err)
+		}
+
+		dispatchers = append(dispatchers, rechercheBenevoles.List...)
+
+		// Should we exit the loop?
+		if rechercheBenevoles.Pages == 0 || rechercheBenevoles.Page == rechercheBenevoles.Pages-1 {
+			allResultsAreIn = true
+		} else {
+			currentPage++
+			currentPageAsString = strconv.Itoa(currentPage)
+			query.Set("page", currentPageAsString)
+			parse.RawQuery = query.Encode()
+		}
+
+		log.Printf("Done parsing results for page %d", currentPage-1)
+	}
+
+	return dispatchers, nil
+
 }
