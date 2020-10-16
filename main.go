@@ -35,10 +35,68 @@ func main() {
 				if err != nil {
 					return err
 				}
-				err = pegassClient.GetCurrentUser()
+				user, err := pegassClient.GetCurrentUser()
 				if err != nil {
 					return err
 				}
+				log.Printf("Bonjour %s %s (NIVOL: %s) !", user.Utilisateur.Prenom, user.Utilisateur.Nom, user.Utilisateur.ID)
+				return nil
+			},
+		},
+		{
+			Name:  "dispatchers",
+			Usage: "Get list of current dispatchers",
+			Action: func(c *cli.Context) error {
+				err := pegassClient.ReAuthenticate()
+				if err != nil {
+					return err
+				}
+
+				_, err = pegassClient.GetDispatchers()
+				if err != nil {
+					return err
+				}
+				return nil
+			},
+		},
+		{
+			Name:  "dispatcherstats",
+			Usage: "Get dispatcher stats",
+			Action: func(c *cli.Context) error {
+				err := pegassClient.ReAuthenticate()
+				if err != nil {
+					return err
+				}
+
+				dispatchers, err := pegassClient.GetDispatchers()
+				if err != nil {
+					return err
+				}
+
+				for _, dispatcher := range dispatchers {
+					stats, err := pegassClient.GetStatsForUser(dispatcher.ID)
+					if err != nil {
+						return err
+					}
+
+					reguleCount := 0
+
+					for _, statistique := range stats.Statistiques {
+						if statistique.StatistiquesGroupeAction.Label == "Urgence et Secourisme" {
+							for _, activite := range statistique.StatistiquesActivites {
+								if activite.Label == "Régulation" {
+									reguleCount = activite.Nombre
+									break
+								}
+							}
+
+							break
+						}
+					}
+
+					log.Printf("Utilisateur: %s %s : %d régulations", dispatcher.Nom, dispatcher.Prenom, reguleCount)
+				}
+
 				return nil
 			},
 		},
