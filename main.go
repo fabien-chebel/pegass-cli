@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
+	"github.com/fabien-chebel/pegass-cli/redcross"
 	"gopkg.in/urfave/cli.v1"
 	"log"
 	"os"
@@ -56,6 +58,47 @@ func main() {
 				if err != nil {
 					return err
 				}
+				return nil
+			},
+		},
+		{
+			Name:  "regulation",
+			Usage: "Get dispatcher activities",
+			Action: func(c *cli.Context) error {
+				err := pegassClient.ReAuthenticate()
+				if err != nil {
+					return err
+				}
+
+				var regulations []redcross.Regulation
+				regulations, err = pegassClient.GetDispatcherSchedule("2019-01-01", "2019-12-31")
+				if err != nil {
+					return err
+				}
+
+				csvWriter := csv.NewWriter(os.Stdout)
+				csvWriter.Write([]string{
+					"startDate",
+					"endDate",
+					"nivolRegulateur",
+					"nomRegulateur",
+					"prenomRegulateur",
+				})
+
+				for _, regulation := range regulations {
+					err = csvWriter.Write([]string{
+						regulation.Debut.String(),
+						regulation.Fin.String(),
+						regulation.Regulateur.ID,
+						regulation.Regulateur.Nom,
+						regulation.Regulateur.Prenom,
+					})
+					if err != nil {
+						log.Fatalln("failed to write csv output", err)
+					}
+				}
+				csvWriter.Flush()
+
 				return nil
 			},
 		},

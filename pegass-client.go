@@ -12,7 +12,9 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
+	"time"
 )
 
 type PegassClient struct {
@@ -167,6 +169,28 @@ func (pegassClient PegassClient) GetCurrentUser() (redcross.GestionDesDroits, er
 	return user, nil
 }
 
+func (pegassClient PegassClient) GetUserDetails(nivol string) (redcross.Utilisateur, error) {
+	var user = redcross.Utilisateur{}
+
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	requestUrl := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/utilisateur/%s", nivol)
+	getRequest, err := httpClient.Get(requestUrl)
+	if err != nil {
+		return user, fmt.Errorf("failed to prepare http request: %w", err)
+	}
+	defer getRequest.Body.Close()
+
+	err = json.NewDecoder(getRequest.Body).Decode(&user)
+	if err != nil {
+		return user, fmt.Errorf("failed to unmarshal request from pegass: %w", err)
+	}
+
+	return user, nil
+}
+
 func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBenevole, error) {
 	var stats = redcross.StatsBenevole{}
 	var httpClient = http.Client{
@@ -183,7 +207,6 @@ func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBe
 	}
 	defer getRequest.Body.Close()
 
-	stats = redcross.StatsBenevole{}
 	err = json.NewDecoder(getRequest.Body).Decode(&stats)
 	if err != nil {
 		return stats, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
@@ -250,4 +273,81 @@ func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error
 
 	return dispatchers, nil
 
+}
+
+func (pegassClient PegassClient) GetDispatcherSchedule(startDate string, endDate string) ([]redcross.Regulation, error) {
+	var regulations []redcross.Regulation
+	location, _ := time.LoadLocation("Europe/Paris")
+	var userCache = make(map[string]redcross.Utilisateur)
+
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	requestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/activite?debut=%s&fin=%s&creationEnMasse=true&structureCreateur=97&typeActivite=10114", startDate, endDate)
+	getRequest, err := httpClient.Get(requestURI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare http request: %w", err)
+	}
+	defer getRequest.Body.Close()
+
+	var activities []redcross.Activity
+	err = json.NewDecoder(getRequest.Body).Decode(&activities)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
+	}
+
+	for _, activity := range activities {
+		for _, seance := range activity.SeanceList {
+			seanceRequestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/seance/%s/inscription", seance.ID)
+			seanceRequest, err := httpClient.Get(seanceRequestURI)
+			if err != nil {
+				return nil, fmt.Errorf("Failed to prepare http request: %w", err)
+			}
+			defer seanceRequest.Body.Close()
+
+			var seanceDetails []redcross.Seance
+			err = json.NewDecoder(seanceRequest.Body).Decode(&seanceDetails)
+			if err != nil {
+				return nil, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
+			}
+
+			for _, inscription := range seanceDetails {
+				if inscription.Role == "18" && inscription.Type == "COMP" {
+					var user redcross.Utilisateur
+					user, isInCache := userCache[inscription.Utilisateur.ID]
+					if !isInCache {
+						user, err = pegassClient.GetUserDetails(inscription.Utilisateur.ID)
+						if err != nil {
+							log.Printf("Failed to fetch details for user with id %s: %w\n", inscription.Utilisateur.ID, err)
+						}
+						userCache[inscription.Utilisateur.ID] = user
+					}
+					seanceStartTime, err := time.ParseInLocation("2006-01-02T15:04:05", seance.Debut, location)
+					if err != nil {
+						log.Printf("failed to parse start time '%s': %w", seance.Debut, err)
+					}
+					seanceEndTime, err := time.ParseInLocation("2006-01-02T15:04:05", seance.Fin, location)
+					if err != nil {
+						log.Printf("failed to parse end time '%s': %w", seance.Debut, err)
+					}
+					regulation := redcross.Regulation{
+						ID:         seance.ID,
+						Statut:     activity.Statut,
+						Debut:      seanceStartTime,
+						Fin:        seanceEndTime,
+						Regulateur: user,
+					}
+					regulations = append(regulations, regulation)
+				}
+			}
+
+		}
+	}
+
+	sort.Slice(regulations, func(i, j int) bool {
+		return regulations[i].Debut.Before(regulations[j].Debut)
+	})
+
+	return regulations, nil
 }
