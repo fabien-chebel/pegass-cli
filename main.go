@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"gopkg.in/urfave/cli.v1"
 	"log"
 	"os"
+	"strconv"
 )
 
 var pegassClient = PegassClient{}
@@ -95,6 +97,44 @@ func main() {
 					}
 
 					log.Printf("Utilisateur: %s %s : %d régulations", dispatcher.Nom, dispatcher.Prenom, reguleCount)
+				}
+
+				return nil
+			},
+		},
+		{
+			Name:  "regulationstats",
+			Usage: "Export regulation stats",
+			Action: func(c *cli.Context) error {
+				err := pegassClient.ReAuthenticate()
+				if err != nil {
+					return err
+				}
+
+				statsByUser, err := pegassClient.GetActivityStats()
+				if err != nil {
+					return err
+				}
+
+				f, err := os.Create("stats-regulation.csv")
+				defer f.Close()
+				if err != nil {
+					return err
+				}
+
+				w := csv.NewWriter(f)
+				defer w.Flush()
+
+				w.Write([]string{"nom,prenom,regule,eval,opr"})
+
+				for nivol, stats := range statsByUser {
+					details, err := pegassClient.GetUserDetails(nivol)
+					if err != nil {
+						log.Printf("failed to fetch user details for user '%s' ; %s", nivol, err)
+					}
+					log.Printf("Utilisateur %s %s ; %d regulations, %d eval, %d OPR", details.Nom, details.Prenom, stats.Regul, stats.Eval, stats.OPR)
+					record := []string{details.Nom, details.Prenom, strconv.Itoa(stats.Regul), strconv.Itoa(stats.Eval), strconv.Itoa(stats.OPR)}
+					w.Write(record)
 				}
 
 				return nil

@@ -173,8 +173,8 @@ func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBe
 		Jar: pegassClient.cookieJar,
 	}
 
-	startDate := "2020-01-01"
-	endDate := "2020-08-31"
+	startDate := "2021-01-01"
+	endDate := "2021-12-21"
 
 	requestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/statistiques/benevole/%s/%s/%s/quantite", nivol, startDate, endDate)
 	getRequest, err := httpClient.Get(requestURI)
@@ -190,6 +190,28 @@ func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBe
 	}
 
 	return stats, nil
+}
+
+func (pegassClient PegassClient) GetUserDetails(nivol string) (redcross.Utilisateur, error) {
+	var user = redcross.Utilisateur{}
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	requestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/utilisateur/%s", nivol)
+
+	getRequest, err := httpClient.Get(requestURI)
+	if err != nil {
+		return user, fmt.Errorf("failed to fetch user details: %w", err)
+	}
+	defer getRequest.Body.Close()
+
+	err = json.NewDecoder(getRequest.Body).Decode(&user)
+	if err != nil {
+		return user, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
+	}
+
+	return user, nil
 }
 
 func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error) {
@@ -236,7 +258,7 @@ func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error
 		dispatchers = append(dispatchers, rechercheBenevoles.List...)
 
 		// Should we exit the loop?
-		if rechercheBenevoles.Pages == 0 || rechercheBenevoles.Page == rechercheBenevoles.Pages-1 {
+		if rechercheBenevoles.Total == 0 || rechercheBenevoles.Page == rechercheBenevoles.Total-1 {
 			allResultsAreIn = true
 		} else {
 			currentPage++
@@ -250,4 +272,116 @@ func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error
 
 	return dispatchers, nil
 
+}
+
+func (pegassClient PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, error) {
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	startDate := "2021-01-01"
+	endDate := "2021-12-31"
+
+	parsedUri, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/seance")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse pegass API url: %w", err)
+	}
+
+	query := parsedUri.Query()
+	query.Add("debut", startDate)
+	query.Add("fin", endDate)
+	query.Add("pageInfo", "true")
+	query.Add("size", "100")
+	query.Add("statut", "COMPLETE")
+	query.Add("structure", "97")       // DT92
+	query.Add("typeActivite", "10114") // Regulation
+
+	currentPage := 0
+	query.Add("page", strconv.Itoa(currentPage))
+
+	parsedUri.RawQuery = query.Encode()
+
+	var seanceIds []string
+
+	for allResultsAreIn := false; !allResultsAreIn; {
+
+		getRequest, err := httpClient.Get(parsedUri.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to create get request to pegass 'seance' endpoint: %w", err)
+		}
+		defer getRequest.Body.Close()
+
+		var seanceList = redcross.SeanceList{}
+		err = json.NewDecoder(getRequest.Body).Decode(&seanceList)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal search results: %s", err)
+		}
+
+		log.Printf("Parsing results for page %d / %d", currentPage+1, seanceList.TotalPages)
+
+		for _, seance := range seanceList.Content {
+			seanceIds = append(seanceIds, seance.ID)
+		}
+
+		if seanceList.Last == true {
+			allResultsAreIn = true
+		} else {
+			currentPage++
+			query.Set("page", strconv.Itoa(currentPage))
+			parsedUri.RawQuery = query.Encode()
+		}
+
+	}
+
+	var statsMap = make(map[string]redcross.RegulationStats)
+
+	for _, id := range seanceIds {
+		log.Printf("Computing stats for seance '%s'", id)
+
+		inscriptionRequestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/seance/%s/inscription", id)
+		inscriptionRequest, err := httpClient.Get(inscriptionRequestURI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request to pgeass 'seance' endpoint: %w", err)
+		}
+		defer inscriptionRequest.Body.Close()
+
+		inscriptions := redcross.InscriptionList{}
+		err = json.NewDecoder(inscriptionRequest.Body).Decode(&inscriptions)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
+		}
+
+		for _, inscription := range inscriptions {
+			entry, ok := statsMap[inscription.Utilisateur.ID]
+			if !ok {
+				entry = redcross.RegulationStats{
+					OPR:   0,
+					Eval:  0,
+					Regul: 0,
+				}
+			}
+
+			switch inscription.Role {
+			case "47": // FORM OPR
+				entry.OPR++
+			case "18": // Régulateur
+				entry.Regul++
+			case "1": // Participant
+				entry.OPR++
+			case "80": // Aide-Régulateur
+				entry.Regul++
+			case "63": // Evaluateur régulateur
+				entry.Eval++
+			case "PARTICIPANT":
+				entry.OPR++
+			default:
+				log.Printf("Unsupported role: %s ; seance id: %s", inscription.Role, inscription.Seance.ID)
+			}
+
+			statsMap[inscription.Utilisateur.ID] = entry
+		}
+
+	}
+
+	return statsMap, nil
 }

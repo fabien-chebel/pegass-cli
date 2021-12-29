@@ -5,12 +5,11 @@ type GestionDesDroits struct {
 }
 
 type RechercheBenevoles struct {
-	List     []Utilisateur `json:"list"`
-	Page     int           `json:"page"`
-	Pages    int           `json:"pages"`
-	Total    int           `json:"total"`
-	CanAdmin bool          `json:"canAdmin"`
-	Perpage  int           `json:"perpage"`
+	List    []Utilisateur `json:"content"`
+	Page    int           `json:"number"`
+	Total   int           `json:"totalPages"`
+	Perpage int           `json:"perpage"`
+	Last    bool          `json:"last"`
 }
 
 type Structure struct {
@@ -37,11 +36,7 @@ type Utilisateur struct {
 	Nom         string    `json:"nom"`
 	Prenom      string    `json:"prenom"`
 	Coordonnees []struct {
-		ID struct {
-			UtilisateurID string `json:"utilisateurId"`
-			MoyenComID    string `json:"moyenComId"`
-			Numero        int    `json:"numero"`
-		} `json:"id"`
+		ID            string `json:"id"`
 		UtilisateurID string `json:"utilisateurId"`
 		MoyenComID    string `json:"moyenComId"`
 		Numero        int    `json:"numero"`
@@ -54,4 +49,8 @@ type Utilisateur struct {
 	Actif       bool   `json:"actif"`
 	Mineur      bool   `json:"mineur"`
 	Commentaire string `json:"commentaire,omitempty"`
+}
+
+type RegulationStats struct {
+	OPR, Eval, Regul int
 }
