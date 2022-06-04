@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"gopkg.in/urfave/cli.v1"
 	"log"
 	"os"
+	"strconv"
 )
 
 var pegassClient = PegassClient{}
@@ -95,6 +98,91 @@ func main() {
 					}
 
 					log.Printf("Utilisateur: %s %s : %d régulations", dispatcher.Nom, dispatcher.Prenom, reguleCount)
+				}
+
+				return nil
+			},
+		},
+		{
+			Name:  "regulationstats",
+			Usage: "Export regulation stats",
+			Action: func(c *cli.Context) error {
+				err := pegassClient.ReAuthenticate()
+				if err != nil {
+					return err
+				}
+
+				statsByUser, err := pegassClient.GetActivityStats()
+				if err != nil {
+					return err
+				}
+
+				f, err := os.Create("stats-regulation.csv")
+				defer f.Close()
+				if err != nil {
+					return err
+				}
+
+				w := csv.NewWriter(f)
+				defer w.Flush()
+
+				w.Write([]string{"nom,prenom,regule,eval,opr"})
+
+				for nivol, stats := range statsByUser {
+					details, err := pegassClient.GetUserDetails(nivol)
+					if err != nil {
+						log.Printf("failed to fetch user details for user '%s' ; %s", nivol, err)
+					}
+					log.Printf("Utilisateur %s %s ; %d regulations, %d eval, %d OPR", details.Nom, details.Prenom, stats.Regul, stats.Eval, stats.OPR)
+					record := []string{details.Nom, details.Prenom, strconv.Itoa(stats.Regul), strconv.Itoa(stats.Eval), strconv.Itoa(stats.OPR)}
+					w.Write(record)
+				}
+
+				return nil
+			},
+		},
+		{
+			Name:  "find-users-for-role",
+			Usage: "Export a list of users matching a given pegass role",
+			Action: func(c *cli.Context) error {
+				roleName := c.Args().Get(0)
+
+				err := pegassClient.ReAuthenticate()
+				if err != nil {
+					return err
+				}
+
+				role, err := pegassClient.FindRoleByName(roleName)
+				if err != nil {
+					return err
+				}
+
+				log.Printf("Found role {id: '%s', type: '%s', name: '%s'} for role name '%s'", role.ID, role.Type, role.Libelle, roleName)
+
+				users, err := pegassClient.GetUsersForRole(role)
+
+				f, err := os.Create(fmt.Sprintf("user-export-92-%s-%s.csv", role.Type, role.ID))
+				defer f.Close()
+				if err != nil {
+					return err
+				}
+
+				w := csv.NewWriter(f)
+				defer w.Flush()
+
+				w.Write([]string{"nom", "prenom", "UL", "nivol", "phone-number", "role"})
+
+				for _, user := range users {
+					phoneNumber := ""
+					for _, coordonnee := range user.Coordonnees {
+						if coordonnee.MoyenComID == "POR" {
+							phoneNumber = coordonnee.Libelle
+							break
+						}
+					}
+
+					record := []string{user.Nom, user.Prenom, user.Structure.Libelle, user.ID, phoneNumber, roleName}
+					w.Write(record)
 				}
 
 				return nil

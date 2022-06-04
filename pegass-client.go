@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,8 +174,8 @@ func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBe
 		Jar: pegassClient.cookieJar,
 	}
 
-	startDate := "2020-01-01"
-	endDate := "2020-08-31"
+	startDate := "2021-01-01"
+	endDate := "2021-12-21"
 
 	requestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/statistiques/benevole/%s/%s/%s/quantite", nivol, startDate, endDate)
 	getRequest, err := httpClient.Get(requestURI)
@@ -190,6 +191,28 @@ func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBe
 	}
 
 	return stats, nil
+}
+
+func (pegassClient PegassClient) GetUserDetails(nivol string) (redcross.Utilisateur, error) {
+	var user = redcross.Utilisateur{}
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	requestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/utilisateur/%s", nivol)
+
+	getRequest, err := httpClient.Get(requestURI)
+	if err != nil {
+		return user, fmt.Errorf("failed to fetch user details: %w", err)
+	}
+	defer getRequest.Body.Close()
+
+	err = json.NewDecoder(getRequest.Body).Decode(&user)
+	if err != nil {
+		return user, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
+	}
+
+	return user, nil
 }
 
 func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error) {
@@ -236,7 +259,7 @@ func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error
 		dispatchers = append(dispatchers, rechercheBenevoles.List...)
 
 		// Should we exit the loop?
-		if rechercheBenevoles.Pages == 0 || rechercheBenevoles.Page == rechercheBenevoles.Pages-1 {
+		if rechercheBenevoles.Total == 0 || rechercheBenevoles.Page == rechercheBenevoles.Total-1 {
 			allResultsAreIn = true
 		} else {
 			currentPage++
@@ -250,4 +273,303 @@ func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error
 
 	return dispatchers, nil
 
+}
+
+func (pegassClient PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, error) {
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	startDate := "2021-01-01"
+	endDate := "2021-12-31"
+
+	parsedUri, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/seance")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse pegass API url: %w", err)
+	}
+
+	query := parsedUri.Query()
+	query.Add("debut", startDate)
+	query.Add("fin", endDate)
+	query.Add("pageInfo", "true")
+	query.Add("size", "100")
+	query.Add("statut", "COMPLETE")
+	query.Add("structure", "97")       // DT92
+	query.Add("typeActivite", "10114") // Regulation
+
+	currentPage := 0
+	query.Add("page", strconv.Itoa(currentPage))
+
+	parsedUri.RawQuery = query.Encode()
+
+	var seanceIds []string
+
+	for allResultsAreIn := false; !allResultsAreIn; {
+
+		getRequest, err := httpClient.Get(parsedUri.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to create get request to pegass 'seance' endpoint: %w", err)
+		}
+		defer getRequest.Body.Close()
+
+		var seanceList = redcross.SeanceList{}
+		err = json.NewDecoder(getRequest.Body).Decode(&seanceList)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal search results: %s", err)
+		}
+
+		log.Printf("Parsing results for page %d / %d", currentPage+1, seanceList.TotalPages)
+
+		for _, seance := range seanceList.Content {
+			seanceIds = append(seanceIds, seance.ID)
+		}
+
+		if seanceList.Last == true {
+			allResultsAreIn = true
+		} else {
+			currentPage++
+			query.Set("page", strconv.Itoa(currentPage))
+			parsedUri.RawQuery = query.Encode()
+		}
+
+	}
+
+	var statsMap = make(map[string]redcross.RegulationStats)
+
+	for _, id := range seanceIds {
+		log.Printf("Computing stats for seance '%s'", id)
+
+		inscriptionRequestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/seance/%s/inscription", id)
+		inscriptionRequest, err := httpClient.Get(inscriptionRequestURI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request to pgeass 'seance' endpoint: %w", err)
+		}
+		defer inscriptionRequest.Body.Close()
+
+		inscriptions := redcross.InscriptionList{}
+		err = json.NewDecoder(inscriptionRequest.Body).Decode(&inscriptions)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response from Pegass: %w", err)
+		}
+
+		for _, inscription := range inscriptions {
+			entry, ok := statsMap[inscription.Utilisateur.ID]
+			if !ok {
+				entry = redcross.RegulationStats{
+					OPR:   0,
+					Eval:  0,
+					Regul: 0,
+				}
+			}
+
+			switch inscription.Role {
+			case "47": // FORM OPR
+				entry.OPR++
+			case "18": // Régulateur
+				entry.Regul++
+			case "1": // Participant
+				entry.OPR++
+			case "80": // Aide-Régulateur
+				entry.Regul++
+			case "63": // Evaluateur régulateur
+				entry.Eval++
+			case "PARTICIPANT":
+				entry.OPR++
+			default:
+				log.Printf("Unsupported role: %s ; seance id: %s", inscription.Role, inscription.Seance.ID)
+			}
+
+			statsMap[inscription.Utilisateur.ID] = entry
+		}
+
+	}
+
+	return statsMap, nil
+}
+
+func (pegassClient PegassClient) GetUsersForRole(role redcross.Role) ([]redcross.Utilisateur, error) {
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/utilisateur")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse url to pegass: %w", err)
+	}
+
+	query := parse.Query()
+	query.Add("pageInfo", "true")
+	query.Add("size", "11")
+	switch role.Type {
+	case "COMP":
+		query.Add("role", role.ID)
+	case "NOMI":
+		query.Add("nomination", role.ID)
+	case "FORM":
+		query.Add("formation", role.ID)
+	default:
+		log.Printf("Unsupported role type '%s'", role.Type)
+		return nil, fmt.Errorf("unsupported role type '%s'", role.Type)
+	}
+	query.Add("searchType", "benevoles")
+	query.Add("withMoyensCom", "true")
+	query.Add("zoneGeoId", "92")
+	query.Add("zoneGeoType", "departement")
+	currentPage := 0
+	currentPageAsString := strconv.Itoa(currentPage)
+	query.Add("page", currentPageAsString)
+
+	parse.RawQuery = query.Encode()
+
+	var users []redcross.Utilisateur
+
+	for allResultsAreIn := false; !allResultsAreIn; {
+		getRequest, err := httpClient.Get(parse.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request to pegass 'recherche utilisateur' endpoint: %w", err)
+		}
+		defer getRequest.Body.Close()
+
+		var rechercheBenevoles = redcross.RechercheBenevoles{}
+		err = json.NewDecoder(getRequest.Body).Decode(&rechercheBenevoles)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal search results: %w", err)
+		}
+
+		users = append(users, rechercheBenevoles.List...)
+
+		// Should we exit the loop?
+		if rechercheBenevoles.Total == 0 || rechercheBenevoles.Page == rechercheBenevoles.Total-1 {
+			allResultsAreIn = true
+		} else {
+			currentPage++
+			currentPageAsString = strconv.Itoa(currentPage)
+			query.Set("page", currentPageAsString)
+			parse.RawQuery = query.Encode()
+		}
+
+		log.Printf("Done parsing results for page %d", currentPage-1)
+	}
+
+	return users, nil
+}
+
+func (pegassClient PegassClient) GetStructuresForDepartment(department string) ([]int, error) {
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	request, err := httpClient.Get(fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/zonegeo/departement/%s", department))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch the list of department structures: %w", err)
+	}
+	defer request.Body.Close()
+
+	var structureList = redcross.StructureList{}
+	err = json.NewDecoder(request.Body).Decode(structureList)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize pegass request: %w", err)
+	}
+
+	var structureIds []int
+	for _, structure := range structureList.StructuresFilles {
+		structureIds = append(structureIds, structure.ID)
+	}
+
+	return structureIds, nil
+}
+
+func (pegassClient PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]redcross.Utilisateur, error) {
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	structures, err := pegassClient.GetStructuresForDepartment("92")
+	if err != nil {
+		return nil, err
+	}
+
+	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/utilisateur/advancedSearch")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse url to pegass: %w", err)
+	}
+
+	query := parse.Query()
+	query.Add("size", "11")
+	currentPage := 0
+	currentPageAsString := strconv.Itoa(currentPage)
+	query.Add("page", currentPageAsString)
+
+	parse.RawQuery = query.Encode()
+
+	jsonBody := redcross.AdvancedSearch{
+		StructureList:   structures,
+		FormationInList: []string{role.ID},
+		SearchType:      "benevoles",
+		WithMoyensCom:   true,
+	}
+	payloadBuffer := new(bytes.Buffer)
+	err = json.NewEncoder(payloadBuffer).Encode(jsonBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize search parameters: %w", err)
+	}
+
+	var users []redcross.Utilisateur
+
+	for allResultsAreIn := false; !allResultsAreIn; {
+		request, err := httpClient.Post(parse.String(), "application/json", payloadBuffer)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute advanced pegass search: %w", err)
+		}
+		defer request.Body.Close()
+
+		var rechercheBenevoles = redcross.RechercheBenevoles{}
+		err = json.NewDecoder(request.Body).Decode(&rechercheBenevoles)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal search results: %w", err)
+		}
+
+		users = append(users, rechercheBenevoles.List...)
+
+		// Should we exit the loop?
+		if rechercheBenevoles.Total == 0 || rechercheBenevoles.Page == rechercheBenevoles.Total-1 {
+			allResultsAreIn = true
+		} else {
+			currentPage++
+			currentPageAsString = strconv.Itoa(currentPage)
+			query.Set("page", currentPageAsString)
+			parse.RawQuery = query.Encode()
+		}
+
+		log.Printf("Done parsing results for page %d", currentPage-1)
+	}
+
+	return users, nil
+}
+
+func (pegassClient PegassClient) FindRoleByName(roleName string) (redcross.Role, error) {
+	var roles []redcross.Role
+
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	getRequest, err := httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/roles")
+	if err != nil {
+		return redcross.Role{}, fmt.Errorf("failed to create request to Pegass 'competences' endpoint: %w", err)
+	}
+	defer getRequest.Body.Close()
+
+	err = json.NewDecoder(getRequest.Body).Decode(&roles)
+	if err != nil {
+		return redcross.Role{}, fmt.Errorf("failed to unmarshal search results: %w", err)
+	}
+
+	for _, role := range roles {
+		if role.Libelle == roleName {
+			return role, nil
+		}
+	}
+
+	return redcross.Role{}, fmt.Errorf("failed to find any matching role")
 }
