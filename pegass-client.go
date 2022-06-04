@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -431,6 +432,99 @@ func (pegassClient PegassClient) GetUsersForRole(role redcross.Role) ([]redcross
 
 		var rechercheBenevoles = redcross.RechercheBenevoles{}
 		err = json.NewDecoder(getRequest.Body).Decode(&rechercheBenevoles)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal search results: %w", err)
+		}
+
+		users = append(users, rechercheBenevoles.List...)
+
+		// Should we exit the loop?
+		if rechercheBenevoles.Total == 0 || rechercheBenevoles.Page == rechercheBenevoles.Total-1 {
+			allResultsAreIn = true
+		} else {
+			currentPage++
+			currentPageAsString = strconv.Itoa(currentPage)
+			query.Set("page", currentPageAsString)
+			parse.RawQuery = query.Encode()
+		}
+
+		log.Printf("Done parsing results for page %d", currentPage-1)
+	}
+
+	return users, nil
+}
+
+func (pegassClient PegassClient) GetStructuresForDepartment(department string) ([]int, error) {
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	request, err := httpClient.Get(fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/zonegeo/departement/%s", department))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch the list of department structures: %w", err)
+	}
+	defer request.Body.Close()
+
+	var structureList = redcross.StructureList{}
+	err = json.NewDecoder(request.Body).Decode(structureList)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize pegass request: %w", err)
+	}
+
+	var structureIds []int
+	for _, structure := range structureList.StructuresFilles {
+		structureIds = append(structureIds, structure.ID)
+	}
+
+	return structureIds, nil
+}
+
+func (pegassClient PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]redcross.Utilisateur, error) {
+	var httpClient = http.Client{
+		Jar: pegassClient.cookieJar,
+	}
+
+	structures, err := pegassClient.GetStructuresForDepartment("92")
+	if err != nil {
+		return nil, err
+	}
+
+	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/utilisateur/advancedSearch")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse url to pegass: %w", err)
+	}
+
+	query := parse.Query()
+	query.Add("size", "11")
+	currentPage := 0
+	currentPageAsString := strconv.Itoa(currentPage)
+	query.Add("page", currentPageAsString)
+
+	parse.RawQuery = query.Encode()
+
+	jsonBody := redcross.AdvancedSearch{
+		StructureList:   structures,
+		FormationInList: []string{role.ID},
+		SearchType:      "benevoles",
+		WithMoyensCom:   true,
+	}
+	payloadBuffer := new(bytes.Buffer)
+	err = json.NewEncoder(payloadBuffer).Encode(jsonBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize search parameters: %w", err)
+	}
+
+	var users []redcross.Utilisateur
+
+	for allResultsAreIn := false; !allResultsAreIn; {
+		request, err := httpClient.Post(parse.String(), "application/json", payloadBuffer)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute advanced pegass search: %w", err)
+		}
+		defer request.Body.Close()
+
+		var rechercheBenevoles = redcross.RechercheBenevoles{}
+		err = json.NewDecoder(request.Body).Decode(&rechercheBenevoles)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal search results: %w", err)
 		}

@@ -161,7 +161,7 @@ func main() {
 
 				users, err := pegassClient.GetUsersForRole(role)
 
-				f, err := os.Create(fmt.Sprintf("user-export-%s-%s.csv", role.Type, role.ID))
+				f, err := os.Create(fmt.Sprintf("user-export-92-%s-%s.csv", role.Type, role.ID))
 				defer f.Close()
 				if err != nil {
 					return err
