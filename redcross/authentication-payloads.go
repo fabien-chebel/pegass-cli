@@ -3,12 +3,14 @@ package redcross
 import "time"
 
 type PasswordAuth struct {
-	Password string `json:"password"`
-	Username string `json:"username"`
-	Options  struct {
-		WarnBeforePasswordExpired bool `json:"warnBeforePasswordExpired"`
-		MultiOptionalFactorEnroll bool `json:"multiOptionalFactorEnroll"`
-	} `json:"options"`
+	Password string              `json:"password"`
+	Username string              `json:"username"`
+	Options  PasswordAuthOptions `json:"options"`
+}
+
+type PasswordAuthOptions struct {
+	WarnBeforePasswordExpired bool `json:"warnBeforePasswordExpired"`
+	MultiOptionalFactorEnroll bool `json:"multiOptionalFactorEnroll"`
 }
 
 type MFAAuthRequest struct {

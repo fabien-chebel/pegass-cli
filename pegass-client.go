@@ -39,10 +39,7 @@ func (pegassClient *PegassClient) Authenticate(username string, password string,
 	passwordAuthPayload := redcross.PasswordAuth{
 		Password: password,
 		Username: username,
-		Options: struct {
-			WarnBeforePasswordExpired bool `json:"warnBeforePasswordExpired"`
-			MultiOptionalFactorEnroll bool `json:"multiOptionalFactorEnroll"`
-		}{
+		Options: redcross.PasswordAuthOptions{
 			WarnBeforePasswordExpired: true,
 			MultiOptionalFactorEnroll: true,
 		},
