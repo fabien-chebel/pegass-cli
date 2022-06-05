@@ -23,7 +23,7 @@ func main() {
 			Usage: "Authenticate to Pegass",
 			Action: func(c *cli.Context) error {
 				configData := parseConfig()
-				err := pegassClient.Authenticate(configData.Username, configData.Password)
+				err := pegassClient.Authenticate(configData.Username, configData.Password, configData.TotpSecretKey)
 				if err != nil {
 					return err
 				}

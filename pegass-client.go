@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	redcross "github.com/fabien-chebel/pegass-cli/redcross"
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/net/html"
 	"io/ioutil"
 	"log"
@@ -14,13 +15,14 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"time"
 )
 
 type PegassClient struct {
 	cookieJar *cookiejar.Jar
 }
 
-func (pegassClient *PegassClient) Authenticate(username string, password string) error {
+func (pegassClient *PegassClient) Authenticate(username string, password string, totpSecretKey string) error {
 
 	if pegassClient.cookieJar == nil {
 		jar, err := cookiejar.New(nil)
@@ -34,28 +36,81 @@ func (pegassClient *PegassClient) Authenticate(username string, password string)
 		Jar: pegassClient.cookieJar,
 	}
 
-	get, err := client.Get("https://pegass.croix-rouge.fr/")
-	if err != nil {
-		return fmt.Errorf("failed to process request: %w", err)
+	passwordAuthPayload := redcross.PasswordAuth{
+		Password: password,
+		Username: username,
+		Options: redcross.PasswordAuthOptions{
+			WarnBeforePasswordExpired: true,
+			MultiOptionalFactorEnroll: true,
+		},
 	}
-	defer get.Body.Close()
-	_, err = ioutil.ReadAll(get.Body)
+	payloadBuffer := new(bytes.Buffer)
+	err := json.NewEncoder(payloadBuffer).Encode(passwordAuthPayload)
 	if err != nil {
-		return fmt.Errorf("failed to access Pegass: %w", err)
+		return fmt.Errorf("failed to encode password authentication payload: %w", err)
+	}
+	request, err := client.Post("https://connect.croix-rouge.fr/api/v1/authn", "application/json", payloadBuffer)
+	if err != nil {
+		return fmt.Errorf("failed to send authentication request to Okta: %w", err)
+	}
+	defer request.Body.Close()
+
+	var passwordAuthResponse = redcross.PasswordAuthResponse{}
+	err = json.NewDecoder(request.Body).Decode(&passwordAuthResponse)
+	if err != nil {
+		panic(err)
 	}
 
-	formRequest, err := client.PostForm("https://id.authentification.croix-rouge.fr/my.policy", url.Values{
-		"username": {username},
-		"password": {password},
-		"vhost":    {"standard"},
-	})
+	fmt.Printf("Password authentication request returned status: '%s'\n", passwordAuthResponse.Status)
+	if passwordAuthResponse.Status != "MFA_REQUIRED" {
+		return fmt.Errorf("expected Okta to ask for MFA challenge but instead got status '%s'", passwordAuthResponse.Status)
+	}
 
+	factorId, err := findTotpFactorId(passwordAuthResponse.Embedded.Factors)
+	if err != nil {
+		return fmt.Errorf("unable to find any TOTP generator registered to this account: %w", err)
+	}
+
+	code, err := totp.GenerateCode(totpSecretKey, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to generate TOTP code: %w", err)
+	}
+	fmt.Printf("Generated 2FA code '%s'\n", code)
+
+	payloadBuffer = new(bytes.Buffer)
+	mfaRequest := redcross.MFAAuthRequest{
+		PassCode:   code,
+		StateToken: passwordAuthResponse.StateToken,
+	}
+	err = json.NewEncoder(payloadBuffer).Encode(mfaRequest)
+	if err != nil {
+		return fmt.Errorf("failed to encode MFA authentication request: %w", err)
+	}
+
+	request, err = client.Post(
+		fmt.Sprintf("https://connect.croix-rouge.fr/api/v1/authn/factors/%s/verify?rememberDevice=false", factorId),
+		"application/json",
+		payloadBuffer,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to send MFA challenge response: %w", err)
+	}
+	defer request.Body.Close()
+
+	var mfaAuthResponse = redcross.MFAAuthResponse{}
+	err = json.NewDecoder(request.Body).Decode(&mfaAuthResponse)
+	if err != nil {
+		return fmt.Errorf("failed to parse MFA validation response: %w", err)
+	}
+	fmt.Printf("Obtained a sessionToken: '%s'\n", mfaAuthResponse.SessionToken)
+
+	request, err = client.Get(fmt.Sprintf("https://connect.croix-rouge.fr/home/croix-rouge_pegass_1/0oa2s6fw19Pp8eQzd417/aln2s6knvxzI5pG6x417?sessionToken=%s", mfaAuthResponse.SessionToken))
 	if err != nil {
 		return fmt.Errorf("failed to authenticate to Pegass: %w", err)
 	}
-	defer formRequest.Body.Close()
+	defer request.Body.Close()
 	var samlResponseToken string
-	tokenizer := html.NewTokenizer(formRequest.Body)
+	tokenizer := html.NewTokenizer(request.Body)
 tokenLoop:
 	for {
 		tokenType := tokenizer.Next()
@@ -118,6 +173,15 @@ tokenLoop:
 
 	log.Println("Authentication succeeded.")
 	return nil
+}
+
+func findTotpFactorId(factors []redcross.Factors) (string, error) {
+	for _, factor := range factors {
+		if factor.FactorType == "token:software:totp" {
+			return factor.ID, nil
+		}
+	}
+	return "", errors.New("no totp generator associated with your account")
 }
 
 func (pegassClient *PegassClient) ReAuthenticate() error {

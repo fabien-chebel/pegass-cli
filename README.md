@@ -6,11 +6,12 @@ A command-line interface to the French Red Cross planning web app, Pegass.
 
 This app requires a valid account on Pegass.
 
-Prior running the app, you must create a `config.json` file with the following content
+Prior to running the app, you must create a `config.json` file with the following content
 ```json
 {
   "username": "PEGASS USERNAME GOES HERE",
-  "password": "PEGASS PASSWORD GOES HERE"
+  "password": "PEGASS PASSWORD GOES HERE",
+  "totp_secret_key": "TOTP SECRET KEY GOES HERE"
 }
 ```
 
