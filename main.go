@@ -4,15 +4,35 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/fabien-chebel/pegass-cli/whatsapp"
+	_ "github.com/mattn/go-sqlite3"
+	log "github.com/sirupsen/logrus"
+	"go.mau.fi/whatsmeow/types"
 	"gopkg.in/urfave/cli.v1"
-	"log"
 	"os"
 	"strconv"
+	"time"
 )
 
 var pegassClient = PegassClient{}
 
+func initClient() (Config, error) {
+	configData := parseConfig()
+	return configData, pegassClient.Authenticate(configData.Username, configData.Password, configData.TotpSecretKey)
+}
+
+func initLogs(verbose bool) {
+	log.SetOutput(os.Stdout)
+	if verbose {
+		log.SetLevel(log.DebugLevel)
+	} else {
+		log.SetLevel(log.InfoLevel)
+	}
+}
+
 func main() {
+	initLogs(os.Getenv("VERBOSE") != "")
+
 	app := cli.NewApp()
 	app.Name = "Pegass CLI"
 	app.Usage = "Interact with Red Cross's Pegass web app through the CLI"
@@ -34,7 +54,7 @@ func main() {
 			Name:  "whoami",
 			Usage: "Get current user information",
 			Action: func(c *cli.Context) error {
-				err := pegassClient.ReAuthenticate()
+				_, err := initClient()
 				if err != nil {
 					return err
 				}
@@ -42,7 +62,7 @@ func main() {
 				if err != nil {
 					return err
 				}
-				log.Printf("Bonjour %s %s (NIVOL: %s) !", user.Utilisateur.Prenom, user.Utilisateur.Nom, user.Utilisateur.ID)
+				log.Infof("Bonjour %s %s (NIVOL: %s) !", user.Utilisateur.Prenom, user.Utilisateur.Nom, user.Utilisateur.ID)
 				return nil
 			},
 		},
@@ -97,7 +117,7 @@ func main() {
 						}
 					}
 
-					log.Printf("Utilisateur: %s %s : %d régulations", dispatcher.Nom, dispatcher.Prenom, reguleCount)
+					log.Infof("Utilisateur: %s %s : %d régulations", dispatcher.Nom, dispatcher.Prenom, reguleCount)
 				}
 
 				return nil
@@ -126,7 +146,10 @@ func main() {
 				w := csv.NewWriter(f)
 				defer w.Flush()
 
-				w.Write([]string{"nom,prenom,regule,eval,opr"})
+				err = w.Write([]string{"nom,prenom,regule,eval,opr"})
+				if err != nil {
+					return err
+				}
 
 				for nivol, stats := range statsByUser {
 					details, err := pegassClient.GetUserDetails(nivol)
@@ -135,7 +158,10 @@ func main() {
 					}
 					log.Printf("Utilisateur %s %s ; %d regulations, %d eval, %d OPR", details.Nom, details.Prenom, stats.Regul, stats.Eval, stats.OPR)
 					record := []string{details.Nom, details.Prenom, strconv.Itoa(stats.Regul), strconv.Itoa(stats.Eval), strconv.Itoa(stats.OPR)}
-					w.Write(record)
+					err = w.Write(record)
+					if err != nil {
+						return err
+					}
 				}
 
 				return nil
@@ -170,7 +196,10 @@ func main() {
 				w := csv.NewWriter(f)
 				defer w.Flush()
 
-				w.Write([]string{"nom", "prenom", "UL", "nivol", "phone-number", "role"})
+				err = w.Write([]string{"nom", "prenom", "UL", "nivol", "phone-number", "role"})
+				if err != nil {
+					return err
+				}
 
 				for _, user := range users {
 					phoneNumber := ""
@@ -182,14 +211,73 @@ func main() {
 					}
 
 					record := []string{user.Nom, user.Prenom, user.Structure.Libelle, user.ID, phoneNumber, roleName}
-					w.Write(record)
+					err = w.Write(record)
+					if err != nil {
+						return err
+					}
 				}
 
 				return nil
 			},
 		},
+		{
+			Name:  "summarize-samu-activities",
+			Usage: "Fetch tomorrow's SAMU-related activities and send their status to WhatsApp",
+			Action: func(c *cli.Context) error {
+				conf, err := initClient()
+				if err != nil {
+					return err
+				}
+
+				day := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+				log.Info("Fetching activity summary for day ", day)
+				summary, err := pegassClient.GetActivityOnDay(day)
+				if err != nil {
+					return err
+				}
+				summary = fmt.Sprintf("Etat du réseau de secours de demain (%s):\n%s", day, summary)
+				log.Info(summary)
+
+				if conf.WhatsAppNotificationGroup == "" {
+					return fmt.Errorf("no WhatsApp group Id provided. Skipping WhatsApp notification")
+				}
+				whatsAppClient := whatsapp.NewClient()
+				jid, err := types.ParseJID(conf.WhatsAppNotificationGroup)
+				if err != nil {
+					return err
+				}
+				err = whatsAppClient.SendMessageToGroup(
+					summary,
+					jid,
+				)
+
+				return err
+			},
+		},
+		{
+			Name:  "register-chat-device",
+			Usage: "Register whats app device locally",
+			Action: func(c *cli.Context) error {
+				whatsAppClient := whatsapp.NewClient()
+				err := whatsAppClient.RegisterDevice()
+				if err != nil {
+					return err
+				}
+				return nil
+			},
+		},
+		{
+			Name: "list-chat-groups",
+			Action: func(c *cli.Context) error {
+				whatsAppClient := whatsapp.NewClient()
+				return whatsAppClient.PrintGroupList()
+			},
+		},
 	}
-	app.Run(os.Args)
+	err := app.Run(os.Args)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func parseConfig() Config {

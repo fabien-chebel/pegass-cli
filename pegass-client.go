@@ -7,34 +7,41 @@ import (
 	"fmt"
 	redcross "github.com/fabien-chebel/pegass-cli/redcross"
 	"github.com/pquerna/otp/totp"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/html"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type PegassClient struct {
-	cookieJar *cookiejar.Jar
+	cookieJar  *cookiejar.Jar
+	httpClient http.Client
+	structures map[int]string
 }
 
-func (pegassClient *PegassClient) Authenticate(username string, password string, totpSecretKey string) error {
-
-	if pegassClient.cookieJar == nil {
+func (p *PegassClient) init() error {
+	if p.cookieJar == nil {
 		jar, err := cookiejar.New(nil)
-		pegassClient.cookieJar = jar
+		p.cookieJar = jar
 		if err != nil {
 			return fmt.Errorf("failed to create cookie jar: %w", err)
 		}
 	}
-
-	client := http.Client{
-		Jar: pegassClient.cookieJar,
+	p.httpClient = http.Client{
+		Jar: p.cookieJar,
 	}
+	return nil
+}
+
+func (p *PegassClient) kickOffAuthentication(username string, password string) (redcross.PasswordAuthResponse, error) {
+	var passwordAuthResponse = redcross.PasswordAuthResponse{}
 
 	passwordAuthPayload := redcross.PasswordAuth{
 		Password: password,
@@ -47,21 +54,72 @@ func (pegassClient *PegassClient) Authenticate(username string, password string,
 	payloadBuffer := new(bytes.Buffer)
 	err := json.NewEncoder(payloadBuffer).Encode(passwordAuthPayload)
 	if err != nil {
-		return fmt.Errorf("failed to encode password authentication payload: %w", err)
+		return passwordAuthResponse, fmt.Errorf("failed to encode password authentication payload: %w", err)
 	}
-	request, err := client.Post("https://connect.croix-rouge.fr/api/v1/authn", "application/json", payloadBuffer)
+	request, err := p.httpClient.Post("https://connect.croix-rouge.fr/api/v1/authn", "application/json", payloadBuffer)
 	if err != nil {
-		return fmt.Errorf("failed to send authentication request to Okta: %w", err)
+		return passwordAuthResponse, fmt.Errorf("failed to send authentication request to Okta: %w", err)
+	}
+	defer request.Body.Close()
+	log.WithFields(log.Fields{
+		"statusCode": request.StatusCode,
+	}).Debug("call to okta /api/v1/authn returned")
+
+	err = json.NewDecoder(request.Body).Decode(&passwordAuthResponse)
+	if err != nil {
+		return passwordAuthResponse, fmt.Errorf("failed to decode password authentication response as json: %w", err)
+	}
+
+	return passwordAuthResponse, nil
+}
+
+func (p PegassClient) obtainOktaSessionToken(factorId string, mfaCode string, stateToken string) (string, error) {
+	payloadBuffer := new(bytes.Buffer)
+	mfaRequest := redcross.MFAAuthRequest{
+		PassCode:   mfaCode,
+		StateToken: stateToken,
+	}
+	err := json.NewEncoder(payloadBuffer).Encode(mfaRequest)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode MFA authentication request: %w", err)
+	}
+
+	request, err := p.httpClient.Post(
+		fmt.Sprintf("https://connect.croix-rouge.fr/api/v1/authn/factors/%s/verify?rememberDevice=false", factorId),
+		"application/json",
+		payloadBuffer,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to send MFA challenge response: %w", err)
 	}
 	defer request.Body.Close()
 
-	var passwordAuthResponse = redcross.PasswordAuthResponse{}
-	err = json.NewDecoder(request.Body).Decode(&passwordAuthResponse)
+	var mfaAuthResponse = redcross.MFAAuthResponse{}
+	err = json.NewDecoder(request.Body).Decode(&mfaAuthResponse)
 	if err != nil {
-		panic(err)
+		return "", fmt.Errorf("failed to parse MFA validation response: %w", err)
+	}
+	log.WithFields(log.Fields{
+		"sessionToken": mfaAuthResponse.SessionToken,
+	}).Debug("successfully obtained session token")
+
+	return mfaAuthResponse.SessionToken, nil
+}
+
+func (p *PegassClient) Authenticate(username string, password string, totpSecretKey string) error {
+	err := p.init()
+	if err != nil {
+		return err
 	}
 
-	fmt.Printf("Password authentication request returned status: '%s'\n", passwordAuthResponse.Status)
+	passwordAuthResponse, err := p.kickOffAuthentication(username, password)
+	if err != nil {
+		return err
+	}
+
+	log.WithFields(log.Fields{
+		"status": passwordAuthResponse.Status,
+	}).Debug("password authentication request successfully performed")
 	if passwordAuthResponse.Status != "MFA_REQUIRED" {
 		return fmt.Errorf("expected Okta to ask for MFA challenge but instead got status '%s'", passwordAuthResponse.Status)
 	}
@@ -75,36 +133,13 @@ func (pegassClient *PegassClient) Authenticate(username string, password string,
 	if err != nil {
 		return fmt.Errorf("failed to generate TOTP code: %w", err)
 	}
-	fmt.Printf("Generated 2FA code '%s'\n", code)
+	log.WithFields(log.Fields{
+		"code": code,
+	}).Debug("generated 2FA totp code")
 
-	payloadBuffer = new(bytes.Buffer)
-	mfaRequest := redcross.MFAAuthRequest{
-		PassCode:   code,
-		StateToken: passwordAuthResponse.StateToken,
-	}
-	err = json.NewEncoder(payloadBuffer).Encode(mfaRequest)
-	if err != nil {
-		return fmt.Errorf("failed to encode MFA authentication request: %w", err)
-	}
+	sessionToken, err := p.obtainOktaSessionToken(factorId, code, passwordAuthResponse.StateToken)
 
-	request, err = client.Post(
-		fmt.Sprintf("https://connect.croix-rouge.fr/api/v1/authn/factors/%s/verify?rememberDevice=false", factorId),
-		"application/json",
-		payloadBuffer,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to send MFA challenge response: %w", err)
-	}
-	defer request.Body.Close()
-
-	var mfaAuthResponse = redcross.MFAAuthResponse{}
-	err = json.NewDecoder(request.Body).Decode(&mfaAuthResponse)
-	if err != nil {
-		return fmt.Errorf("failed to parse MFA validation response: %w", err)
-	}
-	fmt.Printf("Obtained a sessionToken: '%s'\n", mfaAuthResponse.SessionToken)
-
-	request, err = client.Get(fmt.Sprintf("https://connect.croix-rouge.fr/home/croix-rouge_pegass_1/0oa2s6fw19Pp8eQzd417/aln2s6knvxzI5pG6x417?sessionToken=%s", mfaAuthResponse.SessionToken))
+	request, err := p.httpClient.Get(fmt.Sprintf("https://connect.croix-rouge.fr/home/croix-rouge_pegass_1/0oa2s6fw19Pp8eQzd417/aln2s6knvxzI5pG6x417?sessionToken=%s", sessionToken))
 	if err != nil {
 		return fmt.Errorf("failed to authenticate to Pegass: %w", err)
 	}
@@ -137,7 +172,7 @@ tokenLoop:
 		return errors.New("failed to parse SAML Response token")
 	}
 
-	authentRequest, err := client.PostForm("https://pegass.croix-rouge.fr/Shibboleth.sso/SAML2/POST", url.Values{
+	authentRequest, err := p.httpClient.PostForm("https://pegass.croix-rouge.fr/Shibboleth.sso/SAML2/POST", url.Values{
 		"SAMLResponse": {samlResponseToken},
 	})
 	if err != nil {
@@ -149,7 +184,7 @@ tokenLoop:
 	if err != nil {
 		return fmt.Errorf("failed to parse pegass URL: %w", err)
 	}
-	pegassCookies := pegassClient.cookieJar.Cookies(pegassUrl)
+	pegassCookies := p.cookieJar.Cookies(pegassUrl)
 	if len(pegassCookies) != 1 {
 		return errors.New("error: expected to find a single Cookie for Pegass domain")
 	}
@@ -178,13 +213,22 @@ tokenLoop:
 func findTotpFactorId(factors []redcross.Factors) (string, error) {
 	for _, factor := range factors {
 		if factor.FactorType == "token:software:totp" {
+			log.WithFields(log.Fields{
+				"factorType": factor.FactorType,
+				"factorId":   factor.ID,
+			}).Debug("found totp compatible mutlti-factor generator")
 			return factor.ID, nil
 		}
 	}
 	return "", errors.New("no totp generator associated with your account")
 }
 
-func (pegassClient *PegassClient) ReAuthenticate() error {
+func (p *PegassClient) ReAuthenticate() error {
+	err := p.init()
+	if err != nil {
+		return err
+	}
+
 	file, err := os.Open("auth-ticket.json")
 	if err != nil {
 		return fmt.Errorf("failed to read authentication ticket file: %w", err)
@@ -208,17 +252,18 @@ func (pegassClient *PegassClient) ReAuthenticate() error {
 	}}
 	jar.SetCookies(pegassUrl, cookies)
 
-	pegassClient.cookieJar = jar
+	p.cookieJar = jar
 	return nil
 }
 
-func (pegassClient PegassClient) GetCurrentUser() (redcross.GestionDesDroits, error) {
+func (p PegassClient) GetCurrentUser() (redcross.GestionDesDroits, error) {
 	var user = redcross.GestionDesDroits{}
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+	err := p.init()
+	if err != nil {
+		return user, err
 	}
 
-	getRequest, err := httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/gestiondesdroits")
+	getRequest, err := p.httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/gestiondesdroits")
 	if err != nil {
 		return user, fmt.Errorf("failed to create request to Pegass 'gestiondesdroits' endpoint: %w", err)
 	}
@@ -232,17 +277,18 @@ func (pegassClient PegassClient) GetCurrentUser() (redcross.GestionDesDroits, er
 	return user, nil
 }
 
-func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBenevole, error) {
+func (p PegassClient) GetStatsForUser(nivol string) (redcross.StatsBenevole, error) {
 	var stats = redcross.StatsBenevole{}
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+	err := p.init()
+	if err != nil {
+		return stats, err
 	}
 
 	startDate := "2021-01-01"
 	endDate := "2021-12-21"
 
 	requestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/statistiques/benevole/%s/%s/%s/quantite", nivol, startDate, endDate)
-	getRequest, err := httpClient.Get(requestURI)
+	getRequest, err := p.httpClient.Get(requestURI)
 	if err != nil {
 		return stats, fmt.Errorf("failed to create request to pegass 'statistiques benevole' endpoint: %w", err)
 	}
@@ -257,15 +303,16 @@ func (pegassClient PegassClient) GetStatsForUser(nivol string) (redcross.StatsBe
 	return stats, nil
 }
 
-func (pegassClient PegassClient) GetUserDetails(nivol string) (redcross.Utilisateur, error) {
+func (p PegassClient) GetUserDetails(nivol string) (redcross.Utilisateur, error) {
 	var user = redcross.Utilisateur{}
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+	err := p.init()
+	if err != nil {
+		return user, err
 	}
 
 	requestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/utilisateur/%s", nivol)
 
-	getRequest, err := httpClient.Get(requestURI)
+	getRequest, err := p.httpClient.Get(requestURI)
 	if err != nil {
 		return user, fmt.Errorf("failed to fetch user details: %w", err)
 	}
@@ -279,11 +326,11 @@ func (pegassClient PegassClient) GetUserDetails(nivol string) (redcross.Utilisat
 	return user, nil
 }
 
-func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error) {
+func (p PegassClient) GetDispatchers() ([]redcross.Utilisateur, error) {
 	const DISPATCHER_ROLE_ID = "18"
-
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+	err := p.init()
+	if err != nil {
+		return nil, err
 	}
 
 	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/utilisateur")
@@ -308,7 +355,7 @@ func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error
 	var dispatchers []redcross.Utilisateur
 
 	for allResultsAreIn := false; !allResultsAreIn; {
-		getRequest, err := httpClient.Get(parse.String())
+		getRequest, err := p.httpClient.Get(parse.String())
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request to pegass 'recherche utilisateur' endpoint: %w", err)
 		}
@@ -339,9 +386,10 @@ func (pegassClient PegassClient) GetDispatchers() ([]redcross.Utilisateur, error
 
 }
 
-func (pegassClient PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, error) {
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+func (p PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, error) {
+	err := p.init()
+	if err != nil {
+		return nil, err
 	}
 
 	startDate := "2021-01-01"
@@ -370,7 +418,7 @@ func (pegassClient PegassClient) GetActivityStats() (map[string]redcross.Regulat
 
 	for allResultsAreIn := false; !allResultsAreIn; {
 
-		getRequest, err := httpClient.Get(parsedUri.String())
+		getRequest, err := p.httpClient.Get(parsedUri.String())
 		if err != nil {
 			return nil, fmt.Errorf("failed to create get request to pegass 'seance' endpoint: %w", err)
 		}
@@ -382,7 +430,7 @@ func (pegassClient PegassClient) GetActivityStats() (map[string]redcross.Regulat
 			return nil, fmt.Errorf("failed to unmarshal search results: %s", err)
 		}
 
-		log.Printf("Parsing results for page %d / %d", currentPage+1, seanceList.TotalPages)
+		log.Info("Parsing results for page %d / %d", currentPage+1, seanceList.TotalPages)
 
 		for _, seance := range seanceList.Content {
 			seanceIds = append(seanceIds, seance.ID)
@@ -401,10 +449,10 @@ func (pegassClient PegassClient) GetActivityStats() (map[string]redcross.Regulat
 	var statsMap = make(map[string]redcross.RegulationStats)
 
 	for _, id := range seanceIds {
-		log.Printf("Computing stats for seance '%s'", id)
+		log.Info("Computing stats for seance '%s'", id)
 
 		inscriptionRequestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/seance/%s/inscription", id)
-		inscriptionRequest, err := httpClient.Get(inscriptionRequestURI)
+		inscriptionRequest, err := p.httpClient.Get(inscriptionRequestURI)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request to pgeass 'seance' endpoint: %w", err)
 		}
@@ -451,9 +499,10 @@ func (pegassClient PegassClient) GetActivityStats() (map[string]redcross.Regulat
 	return statsMap, nil
 }
 
-func (pegassClient PegassClient) GetUsersForRole(role redcross.Role) ([]redcross.Utilisateur, error) {
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+func (p PegassClient) GetUsersForRole(role redcross.Role) ([]redcross.Utilisateur, error) {
+	err := p.init()
+	if err != nil {
+		return nil, err
 	}
 
 	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/utilisateur")
@@ -488,7 +537,7 @@ func (pegassClient PegassClient) GetUsersForRole(role redcross.Role) ([]redcross
 	var users []redcross.Utilisateur
 
 	for allResultsAreIn := false; !allResultsAreIn; {
-		getRequest, err := httpClient.Get(parse.String())
+		getRequest, err := p.httpClient.Get(parse.String())
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request to pegass 'recherche utilisateur' endpoint: %w", err)
 		}
@@ -518,37 +567,54 @@ func (pegassClient PegassClient) GetUsersForRole(role redcross.Role) ([]redcross
 	return users, nil
 }
 
-func (pegassClient PegassClient) GetStructuresForDepartment(department string) ([]int, error) {
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+func (p *PegassClient) GetAllStructuresForDepartment(department string) ([]int, error) {
+	structures, err := p.GetStructuresForDepartment(department)
+	if err != nil {
+		return nil, err
 	}
 
-	request, err := httpClient.Get(fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/zonegeo/departement/%s", department))
+	var ids []int
+	for key, _ := range structures {
+		ids = append(ids, key)
+	}
+	return ids, nil
+}
+
+func (p PegassClient) GetStructuresForDepartment(department string) (map[int]string, error) {
+	err := p.init()
+	if err != nil {
+		return nil, err
+	}
+
+	request, err := p.httpClient.Get(fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/zonegeo/departement/%s", department))
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch the list of department structures: %w", err)
 	}
 	defer request.Body.Close()
 
 	var structureList = redcross.StructureList{}
-	err = json.NewDecoder(request.Body).Decode(structureList)
+	err = json.NewDecoder(request.Body).Decode(&structureList)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize pegass request: %w", err)
 	}
 
-	var structureIds []int
+	var dict = make(map[int]string)
 	for _, structure := range structureList.StructuresFilles {
-		structureIds = append(structureIds, structure.ID)
+		filteredName := strings.ReplaceAll(structure.Libelle, "UNITE LOCALE DE ", "")
+		filteredName = strings.ReplaceAll(filteredName, "UNITE LOCALE D'", "")
+		dict[structure.ID] = filteredName
 	}
 
-	return structureIds, nil
+	return dict, nil
 }
 
-func (pegassClient PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]redcross.Utilisateur, error) {
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+func (p PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]redcross.Utilisateur, error) {
+	err := p.init()
+	if err != nil {
+		return nil, err
 	}
 
-	structures, err := pegassClient.GetStructuresForDepartment("92")
+	structures, err := p.GetAllStructuresForDepartment("92")
 	if err != nil {
 		return nil, err
 	}
@@ -581,7 +647,7 @@ func (pegassClient PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]
 	var users []redcross.Utilisateur
 
 	for allResultsAreIn := false; !allResultsAreIn; {
-		request, err := httpClient.Post(parse.String(), "application/json", payloadBuffer)
+		request, err := p.httpClient.Post(parse.String(), "application/json", payloadBuffer)
 		if err != nil {
 			return nil, fmt.Errorf("failed to execute advanced pegass search: %w", err)
 		}
@@ -611,14 +677,15 @@ func (pegassClient PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]
 	return users, nil
 }
 
-func (pegassClient PegassClient) FindRoleByName(roleName string) (redcross.Role, error) {
+func (p PegassClient) FindRoleByName(roleName string) (redcross.Role, error) {
 	var roles []redcross.Role
 
-	var httpClient = http.Client{
-		Jar: pegassClient.cookieJar,
+	err := p.init()
+	if err != nil {
+		return redcross.Role{}, err
 	}
 
-	getRequest, err := httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/roles")
+	getRequest, err := p.httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/roles")
 	if err != nil {
 		return redcross.Role{}, fmt.Errorf("failed to create request to Pegass 'competences' endpoint: %w", err)
 	}
@@ -636,4 +703,185 @@ func (pegassClient PegassClient) FindRoleByName(roleName string) (redcross.Role,
 	}
 
 	return redcross.Role{}, fmt.Errorf("failed to find any matching role")
+}
+
+func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) {
+	var inscriptionUrl = fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/seance/%s/inscription", activity.SeanceList[0].ID)
+	response, err := p.httpClient.Get(inscriptionUrl)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+
+	inscriptions := redcross.InscriptionList{}
+	err = json.NewDecoder(response.Body).Decode(&inscriptions)
+
+	var minorCount, chiefCount, driverCount, pse2Count, pse1Count, traineeCount, dispatcherCount, radioOperatorCount, unknownCount int
+	for _, inscription := range inscriptions {
+		userDetails, err := p.GetUserDetails(inscription.Utilisateur.ID)
+		if err != nil {
+			return "", err
+		}
+		if userDetails.Mineur {
+			minorCount++
+		}
+
+		if inscription.Type == "NOMI" && (inscription.Role == "254" || inscription.Role == "255") {
+			// CI RESEAU || CI BSPP
+			chiefCount++
+		} else if inscription.Type == "COMP" && inscription.Role == "10" {
+			// CH
+			driverCount++
+		} else if inscription.Type == "FORM" && inscription.Role == "167" {
+			// PSE2
+			pse2Count++
+		} else if inscription.Type == "FORM" && inscription.Role == "166" {
+			pse1Count++
+		} else if inscription.Role == "PARTICIPANT" {
+			traineeCount++
+		} else if inscription.Type == "COMP" && (inscription.Role == "18" || inscription.Role == "80") {
+			dispatcherCount++
+		} else if inscription.Type == "FORM" && inscription.Role == "47" {
+			radioOperatorCount++
+		} else {
+			log.WithFields(log.Fields{
+				"libelle":    activity.Libelle,
+				"activityId": activity.ID,
+				"role":       inscription.Role,
+				"roleType":   inscription.Type,
+				"nivol":      inscription.Utilisateur.ID,
+			}).Warnf("came accross unknown role for activity '%s' and start date '%s'", activity.Libelle, activity.SeanceList[0].Debut)
+			unknownCount++
+		}
+	}
+
+	buf := new(bytes.Buffer)
+	if len(inscriptions) == 0 {
+		return "[0 PAX]", nil
+	}
+
+	if activity.Libelle == "REGULATION" {
+		buf.WriteString(fmt.Sprintf("[%d PAX]\n\t\t%d ARS, %d OPR, %d Stagiaire", len(inscriptions), dispatcherCount, radioOperatorCount, traineeCount))
+	} else {
+		buf.WriteString(fmt.Sprintf("[%d PAX]", len(inscriptions)))
+	}
+	if minorCount > 0 {
+		buf.WriteString(fmt.Sprintf("\n\t\t⚠️ %d 🔞", minorCount))
+	}
+
+	if activity.Libelle != "REGULATION" {
+		if pse1Count > 1 {
+			buf.WriteString(fmt.Sprintf("\n\t\t⚠️ %d PSE1 (max 1)", pse1Count))
+		}
+		if pse2Count == 0 {
+			buf.WriteString(fmt.Sprintf("\n\t\t⚠️ Aucun PSE2"))
+		}
+	}
+
+	return buf.String(), nil
+}
+
+func (p *PegassClient) GetActivityOnDay(day string) (string, error) {
+	err := p.init()
+	if err != nil {
+		return "", err
+	}
+
+	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/activite")
+	if err != nil {
+		return "", fmt.Errorf("failed to parse url to pegass: %w", err)
+	}
+
+	query := parse.Query()
+	query.Add("debut", day)
+	query.Add("fin", day)
+	query.Add("creationEnMasse", "true")
+	query.Add("structureCreateur", "97")
+
+	parse.RawQuery = query.Encode()
+
+	request, err := p.httpClient.Get(parse.String())
+	if err != nil {
+		return "", fmt.Errorf("failed to search for activities: %w", err)
+	}
+	defer request.Body.Close()
+
+	var activities []redcross.Activity
+	err = json.NewDecoder(request.Body).Decode(&activities)
+	if err != nil {
+		return "", fmt.Errorf("failed to deserialize activity list: %w", err)
+	}
+	sort.Sort(redcross.ByActivity(activities))
+
+	department, err := p.GetStructuresForDepartment("92")
+	if err != nil {
+		return "", err
+	}
+	p.structures = department
+
+	var buffer bytes.Buffer
+	var previousActivity string
+	for _, act := range activities {
+		if act.StructureMenantActivite.ID == 0 || act.TypeActivite.Action.ID != 65 {
+			// Skip unaffected activities and !"Réseau de secours"
+			continue
+		}
+
+		if act.TypeActivite.ID != 10115 && act.TypeActivite.ID != 10114 {
+			// Only keep REGULATION and SAMU activities
+			continue
+		}
+
+		var isCRFActivity = true
+		if _, ok := EXTERNAL_ASSOCIATIONS[act.Responsable.ID]; ok {
+			isCRFActivity = false
+		}
+
+		var comment string
+		if isCRFActivity {
+			comment, err = p.lintActivity(act)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		if previousActivity != act.Libelle {
+			// Create a section
+			var structInfo string
+			if isCRFActivity && act.StructureMenantActivite.ID != 0 && act.Libelle != "REGULATION" {
+				structInfo = p.structures[act.StructureMenantActivite.ID]
+			} else if !isCRFActivity {
+				structInfo = EXTERNAL_ASSOCIATIONS[act.Responsable.ID]
+			}
+			buffer.WriteString(fmt.Sprintf("\n%s", act.Libelle))
+			if structInfo != "" {
+				buffer.WriteString(fmt.Sprintf(" [%s]", structInfo))
+			}
+			buffer.WriteString("\n")
+		}
+		seance := act.SeanceList[0]
+		state := fmt.Sprintf("\t%s — %s - %s %s\n", mapStatusToEmoji(act.Statut), seance.Debut.PrintTimePart(), seance.Fin.PrintTimePart(), comment)
+		buffer.WriteString(state)
+
+		previousActivity = act.Libelle
+	}
+
+	return buffer.String(), nil
+}
+
+var EXTERNAL_ASSOCIATIONS = map[string]string{
+	"01100009671G": "PCPS",
+}
+
+func mapStatusToEmoji(status string) string {
+	switch status {
+	case "Complète":
+		return "✅ "
+	case "Incomplète":
+		return "❌ "
+	case "Annulée":
+		return "🟡"
+	default:
+		return "?"
+	}
 }

@@ -24,3 +24,4 @@ pegass-cli
 # Application configuration file
 config.json
 auth-ticket.json
+pegass.db
