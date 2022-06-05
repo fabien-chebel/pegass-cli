@@ -1,8 +1,9 @@
 package main
 
 type Config struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	TotpSecretKey string `json:"totp_secret_key"`
 }
 
 type AuthTicket struct {
