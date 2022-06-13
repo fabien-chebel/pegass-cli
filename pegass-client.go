@@ -430,7 +430,7 @@ func (p PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, e
 			return nil, fmt.Errorf("failed to unmarshal search results: %s", err)
 		}
 
-		log.Info("Parsing results for page %d / %d", currentPage+1, seanceList.TotalPages)
+		log.Infof("Parsing results for page %d / %d", currentPage+1, seanceList.TotalPages)
 
 		for _, seance := range seanceList.Content {
 			seanceIds = append(seanceIds, seance.ID)
@@ -449,7 +449,7 @@ func (p PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, e
 	var statsMap = make(map[string]redcross.RegulationStats)
 
 	for _, id := range seanceIds {
-		log.Info("Computing stats for seance '%s'", id)
+		log.Infof("Computing stats for seance '%s'", id)
 
 		inscriptionRequestURI := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/seance/%s/inscription", id)
 		inscriptionRequest, err := p.httpClient.Get(inscriptionRequestURI)
@@ -750,7 +750,7 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 				"role":       inscription.Role,
 				"roleType":   inscription.Type,
 				"nivol":      inscription.Utilisateur.ID,
-			}).Warnf("came accross unknown role for activity '%s' and start date '%s'", activity.Libelle, activity.SeanceList[0].Debut)
+			}).Warnf("came accross unknown role for activity '%s' and start date '%s'", activity.Libelle, time.Time(activity.SeanceList[0].Debut))
 			unknownCount++
 		}
 	}
