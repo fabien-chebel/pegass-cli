@@ -11,14 +11,20 @@ import (
 	"gopkg.in/urfave/cli.v1"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
-var pegassClient = PegassClient{}
+var pegassClient PegassClient
 
 func initClient() (Config, error) {
 	configData := parseConfig()
-	return configData, pegassClient.Authenticate(configData.Username, configData.Password, configData.TotpSecretKey)
+	pegassClient = PegassClient{
+		Username:      configData.Username,
+		Password:      configData.Password,
+		TotpSecretKey: configData.TotpSecretKey,
+	}
+	return configData, pegassClient.Authenticate()
 }
 
 func initLogs(verbose bool) {
@@ -42,8 +48,11 @@ func main() {
 			Name:  "login",
 			Usage: "Authenticate to Pegass",
 			Action: func(c *cli.Context) error {
-				configData := parseConfig()
-				err := pegassClient.Authenticate(configData.Username, configData.Password, configData.TotpSecretKey)
+				_, err := initClient()
+				if err != nil {
+					return nil
+				}
+				err = pegassClient.Authenticate()
 				if err != nil {
 					return err
 				}
@@ -231,7 +240,7 @@ func main() {
 
 				day := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
 				log.Info("Fetching activity summary for day ", day)
-				summary, err := pegassClient.GetActivityOnDay(day)
+				summary, err := pegassClient.GetActivityOnDay(day, SAMU)
 				if err != nil {
 					return err
 				}
@@ -246,7 +255,7 @@ func main() {
 				if err != nil {
 					return err
 				}
-				err = whatsAppClient.SendMessageToGroup(
+				err = whatsAppClient.SendMessage(
 					summary,
 					jid,
 				)
@@ -271,6 +280,40 @@ func main() {
 			Action: func(c *cli.Context) error {
 				whatsAppClient := whatsapp.NewClient()
 				return whatsAppClient.PrintGroupList()
+			},
+		},
+		{
+			Name: "start-bot",
+			Action: func(c *cli.Context) error {
+				_, err := initClient()
+				if err != nil {
+					return err
+				}
+
+				whatsAppClient := whatsapp.NewClient()
+				var botService = BotService{
+					pegassClient: &pegassClient,
+					chatClient:   &whatsAppClient,
+				}
+				whatsAppClient.SetMessageCallback(func(senderName string, senderId types.JID, chatId types.JID, content string) {
+					log.Infof("Received message from '%s': %s", senderName, content)
+					var recipient = senderId
+					if chatId != (types.JID{}) {
+						recipient = chatId
+					}
+					lowerMessage := strings.ToLower(content)
+
+					if strings.HasPrefix(lowerMessage, "!psr") {
+						botService.SendActivitySummary(recipient, SAMU)
+					} else if strings.HasPrefix(lowerMessage, "!bspp") {
+						botService.SendActivitySummary(recipient, BSPP)
+					}
+				})
+				err = whatsAppClient.StartBot()
+				if err != nil {
+					return err
+				}
+				return nil
 			},
 		},
 	}

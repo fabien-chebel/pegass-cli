@@ -31,24 +31,26 @@ type Structure struct {
 }
 
 type Utilisateur struct {
-	ID          string    `json:"id"`
-	Structure   Structure `json:"structure"`
-	Nom         string    `json:"nom"`
-	Prenom      string    `json:"prenom"`
-	Coordonnees []struct {
-		ID            string `json:"id"`
-		UtilisateurID string `json:"utilisateurId"`
-		MoyenComID    string `json:"moyenComId"`
-		Numero        int    `json:"numero"`
-		Libelle       string `json:"libelle"`
-		Flag          string `json:"flag"`
-		Visible       bool   `json:"visible"`
-		CanDelete     bool   `json:"canDelete"`
-		CanUpdate     bool   `json:"canUpdate"`
-	} `json:"coordonnees"`
-	Actif       bool   `json:"actif"`
-	Mineur      bool   `json:"mineur"`
-	Commentaire string `json:"commentaire,omitempty"`
+	ID          string        `json:"id"`
+	Structure   Structure     `json:"structure"`
+	Nom         string        `json:"nom"`
+	Prenom      string        `json:"prenom"`
+	Coordonnees []Coordonnees `json:"coordonnees"`
+	Actif       bool          `json:"actif"`
+	Mineur      bool          `json:"mineur"`
+	Commentaire string        `json:"commentaire,omitempty"`
+}
+
+type Coordonnees struct {
+	ID            string `json:"id"`
+	UtilisateurID string `json:"utilisateurId"`
+	MoyenComID    string `json:"moyenComId"`
+	Numero        int    `json:"numero"`
+	Libelle       string `json:"libelle"`
+	Flag          string `json:"flag"`
+	Visible       bool   `json:"visible"`
+	CanDelete     bool   `json:"canDelete"`
+	CanUpdate     bool   `json:"canUpdate"`
 }
 
 type RegulationStats struct {

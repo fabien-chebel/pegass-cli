@@ -20,10 +20,26 @@ import (
 	"time"
 )
 
+type ActivityKind int
+
+const (
+	SAMU ActivityKind = iota
+	BSPP
+)
+
+const (
+	ACTIVITY_RESEAU_15_ID  = 10115
+	ACTIVITY_RESEAU_18_ID  = 10116
+	ACTIVITY_REGULATION_ID = 10114
+)
+
 type PegassClient struct {
-	cookieJar  *cookiejar.Jar
-	httpClient http.Client
-	structures map[int]string
+	cookieJar     *cookiejar.Jar
+	httpClient    http.Client
+	structures    map[int]string
+	Username      string
+	Password      string
+	TotpSecretKey string
 }
 
 func (p *PegassClient) init() error {
@@ -106,13 +122,13 @@ func (p PegassClient) obtainOktaSessionToken(factorId string, mfaCode string, st
 	return mfaAuthResponse.SessionToken, nil
 }
 
-func (p *PegassClient) Authenticate(username string, password string, totpSecretKey string) error {
+func (p *PegassClient) Authenticate() error {
 	err := p.init()
 	if err != nil {
 		return err
 	}
 
-	passwordAuthResponse, err := p.kickOffAuthentication(username, password)
+	passwordAuthResponse, err := p.kickOffAuthentication(p.Username, p.Password)
 	if err != nil {
 		return err
 	}
@@ -129,7 +145,7 @@ func (p *PegassClient) Authenticate(username string, password string, totpSecret
 		return fmt.Errorf("unable to find any TOTP generator registered to this account: %w", err)
 	}
 
-	code, err := totp.GenerateCode(totpSecretKey, time.Now())
+	code, err := totp.GenerateCode(p.TotpSecretKey, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to generate TOTP code: %w", err)
 	}
@@ -499,6 +515,28 @@ func (p PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, e
 	return statsMap, nil
 }
 
+func (p *PegassClient) GetMainMoyenComForUser(nivol string) (string, error) {
+	response, err := p.httpClient.Get(fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/moyencomutilisateur?utilisateur=%s", nivol))
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+
+	var moyenComs []redcross.Coordonnees
+	err = json.NewDecoder(response.Body).Decode(&moyenComs)
+	if err != nil {
+		return "", err
+	}
+
+	for _, com := range moyenComs {
+		if com.MoyenComID == "POR" {
+			return com.Libelle, nil
+		}
+	}
+
+	return "", nil
+}
+
 func (p PegassClient) GetUsersForRole(role redcross.Role) ([]redcross.Utilisateur, error) {
 	err := p.init()
 	if err != nil {
@@ -715,12 +753,17 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 
 	inscriptions := redcross.InscriptionList{}
 	err = json.NewDecoder(response.Body).Decode(&inscriptions)
+	var chiefContactDetails string
 
 	var minorCount, chiefCount, driverCount, pse2Count, pse1Count, traineeCount, dispatcherCount, radioOperatorCount, unknownCount int
 	for _, inscription := range inscriptions {
 		userDetails, err := p.GetUserDetails(inscription.Utilisateur.ID)
 		if err != nil {
 			return "", err
+		}
+		phoneNumber, err := p.GetMainMoyenComForUser(inscription.Utilisateur.ID)
+		if err != nil {
+			log.Warnf("failed to fetch phone number of user '%s'", inscription.Utilisateur.ID)
 		}
 		if userDetails.Mineur {
 			minorCount++
@@ -729,6 +772,9 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 		if inscription.Type == "NOMI" && (inscription.Role == "254" || inscription.Role == "255") {
 			// CI RESEAU || CI BSPP
 			chiefCount++
+			if phoneNumber != "" {
+				chiefContactDetails = fmt.Sprintf("📞 %s %s %s", userDetails.Prenom, userDetails.Nom, phoneNumber)
+			}
 		} else if inscription.Type == "COMP" && inscription.Role == "10" {
 			// CH
 			driverCount++
@@ -768,6 +814,9 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 	if minorCount > 0 {
 		buf.WriteString(fmt.Sprintf("\n\t\t⚠️ %d 🔞", minorCount))
 	}
+	if chiefContactDetails != "" {
+		buf.WriteString("\n\t\t" + chiefContactDetails)
+	}
 
 	if activity.Libelle != "REGULATION" {
 		if pse1Count > 1 {
@@ -781,7 +830,7 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 	return buf.String(), nil
 }
 
-func (p *PegassClient) GetActivityOnDay(day string) (string, error) {
+func (p *PegassClient) GetActivityOnDay(day string, kind ActivityKind) (string, error) {
 	err := p.init()
 	if err != nil {
 		return "", err
@@ -827,9 +876,15 @@ func (p *PegassClient) GetActivityOnDay(day string) (string, error) {
 			continue
 		}
 
-		if act.TypeActivite.ID != 10115 && act.TypeActivite.ID != 10114 {
-			// Only keep REGULATION and SAMU activities
-			continue
+		if kind == SAMU {
+			if act.TypeActivite.ID != ACTIVITY_RESEAU_15_ID && act.TypeActivite.ID != ACTIVITY_REGULATION_ID {
+				// Only keep REGULATION and SAMU activities
+				continue
+			}
+		} else if kind == BSPP {
+			if act.TypeActivite.ID != ACTIVITY_RESEAU_18_ID {
+				continue
+			}
 		}
 
 		var isCRFActivity = true

@@ -9,27 +9,32 @@ import (
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
 type WhatsAppClient struct {
+	client            *whatsmeow.Client
+	onMessageReceived MessageCallback
 }
 
 func NewClient() WhatsAppClient {
 	return WhatsAppClient{}
 }
 
-func (whatsappClient *WhatsAppClient) RegisterDevice() error {
-	client, err := initClient()
+func (w *WhatsAppClient) RegisterDevice() error {
+	err := w.initClient()
 	if err != nil {
 		return nil
 	}
 
-	if client.Store.ID == nil {
-		qrChannel, _ := client.GetQRChannel(context.Background())
-		err = client.Connect()
+	if w.client.Store.ID == nil {
+		qrChannel, _ := w.client.GetQRChannel(context.Background())
+		err = w.client.Connect()
 		if err != nil {
 			return err
 		}
@@ -42,31 +47,26 @@ func (whatsappClient *WhatsAppClient) RegisterDevice() error {
 			}
 		}
 	} else {
-		return fmt.Errorf("Device is already registered to a What's App account: %s", client.Store.PushName)
+		return fmt.Errorf("Device is already registered to a What's App account: %s", w.client.Store.PushName)
 	}
 
 	return nil
 }
 
-func (whatsAppClient *WhatsAppClient) SendMessageToGroup(message string, groupId types.JID) error {
-	client, err := initClient()
+func (w *WhatsAppClient) SendMessage(message string, groupId types.JID) error {
+	err := w.initAndConnectIfNecessary()
 	if err != nil {
 		return err
 	}
 
-	err = client.Connect()
-	if err != nil {
-		return err
-	}
-
-	_, err = client.SendMessage(groupId, "", &waProto.Message{Conversation: proto.String(message)})
+	_, err = w.client.SendMessage(groupId, "", &waProto.Message{Conversation: proto.String(message)})
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func initClient() (*whatsmeow.Client, error) {
+func (w *WhatsAppClient) initClient() error {
 	var minLogLevel = "INFO"
 	if os.Getenv("VERBOSE") != "" {
 		minLogLevel = "DEBUG"
@@ -74,26 +74,41 @@ func initClient() (*whatsmeow.Client, error) {
 	dbLog := waLog.Stdout("Database", minLogLevel, true)
 	container, err := sqlstore.New("sqlite3", "file:pegass.db?_foreign_keys=on", dbLog)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	device, err := container.GetFirstDevice()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	clientLog := waLog.Stdout("Client", minLogLevel, true)
-	return whatsmeow.NewClient(device, clientLog), nil
+	w.client = whatsmeow.NewClient(device, clientLog)
+	return nil
+}
+
+func (w *WhatsAppClient) initAndConnectIfNecessary() error {
+	if w.client == nil {
+		err := w.initClient()
+		if err != nil {
+			return err
+		}
+	}
+
+	if !w.client.IsConnected() {
+		err := w.client.Connect()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (w *WhatsAppClient) PrintGroupList() error {
-	client, err := initClient()
+	err := w.initAndConnectIfNecessary()
 	if err != nil {
 		return err
 	}
-	err = client.Connect()
-	if err != nil {
-		return err
-	}
-	groups, err := client.GetJoinedGroups()
+	groups, err := w.client.GetJoinedGroups()
 	if err != nil {
 		return err
 	}
@@ -102,3 +117,34 @@ func (w *WhatsAppClient) PrintGroupList() error {
 	}
 	return nil
 }
+
+func (w *WhatsAppClient) StartBot() error {
+	err := w.initAndConnectIfNecessary()
+	if err != nil {
+		return err
+	}
+
+	w.client.AddEventHandler(w.eventHandler)
+
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+
+	w.client.Disconnect()
+	return nil
+}
+
+func (w *WhatsAppClient) SetMessageCallback(callback MessageCallback) {
+	w.onMessageReceived = callback
+}
+
+func (w *WhatsAppClient) eventHandler(evt interface{}) {
+	switch v := evt.(type) {
+	case *events.Message:
+		if w.onMessageReceived != nil {
+			w.onMessageReceived(v.Info.PushName, v.Info.Sender, v.Info.Chat, v.Message.GetConversation())
+		}
+	}
+}
+
+type MessageCallback func(senderName string, senderId types.JID, chatId types.JID, content string)
