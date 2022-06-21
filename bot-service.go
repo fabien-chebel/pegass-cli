@@ -23,7 +23,7 @@ func (b *BotService) SendActivitySummary(recipient types.JID, kind ActivityKind)
 
 	day := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
 	log.Info("Fetching activity summary for day ", day)
-	summary, err := b.pegassClient.GetActivityOnDay(day, kind)
+	summary, err := b.pegassClient.GetActivityOnDay(day, kind, false)
 	if err != nil {
 		log.Errorf("failed to generate activity summary for day '%s' and kind '%d'", day, kind)
 		return
