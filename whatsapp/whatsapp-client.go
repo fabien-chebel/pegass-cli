@@ -143,7 +143,7 @@ func (w *WhatsAppClient) eventHandler(evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
 		if w.onMessageReceived != nil {
-			w.onMessageReceived(v.Info.PushName, v.Info.Sender, v.Info.Chat, v.Message.GetConversation())
+			w.onMessageReceived(v.Info.PushName, v.Info.Sender, v.Info.Chat, v.Message.GetConversation(), v.Info.Timestamp)
 		}
 	case *events.Disconnected:
 		log.Warn("WhatsApp client was disconnected")
@@ -162,4 +162,4 @@ func (w *WhatsAppClient) eventHandler(evt interface{}) {
 	}
 }
 
-type MessageCallback func(senderName string, senderId types.JID, chatId types.JID, content string)
+type MessageCallback func(senderName string, senderId types.JID, chatId types.JID, content string, timestamp time.Time)

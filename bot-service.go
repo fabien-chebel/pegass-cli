@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/fabien-chebel/pegass-cli/whatsapp"
 	log "github.com/sirupsen/logrus"
@@ -13,25 +14,45 @@ type BotService struct {
 	chatClient   *whatsapp.WhatsAppClient
 }
 
-func (b *BotService) SendActivitySummary(recipient types.JID, kind ActivityKind) {
+func (b *BotService) SendActivitySummary(recipient types.JID, kind ActivityKind, dayCount int) {
+	var kindName string
+	if kind == SAMU {
+		kindName = "SAMU"
+	} else {
+		kindName = "BSPP"
+	}
 
-	err := b.chatClient.SendMessage("🤖 C'est reçu. Je génère l'état des postes de demain.", recipient)
+	err := b.chatClient.SendMessage(fmt.Sprintf("🤖 C'est reçu. Je génère l'état des postes %s sur %d jours.", kindName, dayCount), recipient)
 	if err != nil {
 		log.Errorf("failed to send whatsapp message: %s", err.Error())
 		return
 	}
 
-	day := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
-	log.Info("Fetching activity summary for day ", day)
-	summary, err := b.pegassClient.GetActivityOnDay(day, kind, false)
-	if err != nil {
-		log.Errorf("failed to generate activity summary for day '%s' and kind '%d'", day, kind)
-		return
-	}
-	summary = fmt.Sprintf("Etat du réseau de secours de demain (%s):\n%s", day, summary)
+	for i := 0; i < dayCount; i++ {
+		var buf = new(bytes.Buffer)
 
-	err = b.chatClient.SendMessage(
-		summary,
-		recipient,
-	)
+		day := time.Now().AddDate(0, 0, i).Format("2006-01-02")
+		log.Infof("fetching activity summary for day '%s' and kind '%#v'", day, kind)
+		summary, err := b.pegassClient.GetActivityOnDay(day, kind, false)
+		if err != nil {
+			log.Errorf("failed to generate activity summary for day '%s' and kind '%d'. error='%s'", day, kind, err.Error())
+			return
+		}
+
+		switch i {
+		case 0:
+			buf.WriteString(fmt.Sprintf("*Aujourd'hui* (%s) :\n", day))
+		case 1:
+			buf.WriteString(fmt.Sprintf("*Demain* (%s) :\n", day))
+		case 2:
+			buf.WriteString(fmt.Sprintf("*Après-demain* (%s) :\n", day))
+		}
+
+		buf.WriteString(summary + "\n")
+		err = b.chatClient.SendMessage(
+			buf.String(),
+			recipient,
+		)
+	}
+
 }

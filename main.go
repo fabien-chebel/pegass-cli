@@ -301,20 +301,27 @@ func main() {
 					pegassClient: &pegassClient,
 					chatClient:   &whatsAppClient,
 				}
-				whatsAppClient.SetMessageCallback(func(senderName string, senderId types.JID, chatId types.JID, content string) {
+				whatsAppClient.SetMessageCallback(func(senderName string, senderId types.JID, chatId types.JID, content string, timestamp time.Time) {
 					if !isGroupOwnedByCRF(config.WhatsAppBotGroups, chatId.String()) {
 						// Security: only whitelisted groups are able to use bot features
 						return
 					}
 					log.Infof("Received message from '%s': %s", senderName, content)
+					if time.Since(timestamp) > 2*time.Minute {
+						log.Infof("ignoring message, as it was sent more than 2 minutes ago.")
+						return
+					}
 
 					var recipient = chatId
 					lowerMessage := strings.ToLower(content)
 
 					if strings.HasPrefix(lowerMessage, "!psr") {
-						botService.SendActivitySummary(recipient, SAMU)
+						botService.SendActivitySummary(recipient, SAMU, 3)
 					} else if strings.HasPrefix(lowerMessage, "!bspp") {
-						botService.SendActivitySummary(recipient, BSPP)
+						botService.SendActivitySummary(recipient, BSPP, 3)
+					} else if strings.HasPrefix(lowerMessage, "!today") {
+						botService.SendActivitySummary(recipient, SAMU, 1)
+						botService.SendActivitySummary(recipient, BSPP, 1)
 					}
 				})
 				err = whatsAppClient.StartBot()
