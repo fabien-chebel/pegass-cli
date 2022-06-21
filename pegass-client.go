@@ -830,7 +830,7 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 	return buf.String(), nil
 }
 
-func (p *PegassClient) GetActivityOnDay(day string, kind ActivityKind) (string, error) {
+func (p *PegassClient) GetActivityOnDay(day string, kind ActivityKind, shouldCensorData bool) (string, error) {
 	err := p.init()
 	if err != nil {
 		return "", err
@@ -893,7 +893,7 @@ func (p *PegassClient) GetActivityOnDay(day string, kind ActivityKind) (string, 
 		}
 
 		var comment string
-		if isCRFActivity {
+		if isCRFActivity && !shouldCensorData {
 			comment, err = p.lintActivity(act)
 			if err != nil {
 				return "", err

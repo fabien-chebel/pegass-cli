@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 type WhatsAppClient struct {
@@ -143,6 +144,20 @@ func (w *WhatsAppClient) eventHandler(evt interface{}) {
 	case *events.Message:
 		if w.onMessageReceived != nil {
 			w.onMessageReceived(v.Info.PushName, v.Info.Sender, v.Info.Chat, v.Message.GetConversation())
+		}
+	case *events.Disconnected:
+		log.Warn("WhatsApp client was disconnected")
+	case *events.ConnectFailure:
+		log.Warnf("failed to connect to whatsapp: %#v", v.Reason)
+	case *events.LoggedOut:
+		log.Warnf("Received 'loged out' event: %#v", v.Reason)
+	case *events.StreamReplaced:
+		log.Warnf("Another WhatsApp client connected and stole our session! Will reconnect in a few seconds")
+		w.client.Disconnect()
+		time.Sleep(5 * time.Second)
+		err := w.initAndConnectIfNecessary()
+		if err != nil {
+			log.Error("failed to reconnect to whatsapp", err)
 		}
 	}
 }

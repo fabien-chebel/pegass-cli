@@ -239,8 +239,14 @@ func main() {
 				}
 
 				day := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+
+				var shouldCensorData = true
+				if isGroupOwnedByCRF(conf.WhatsAppBotGroups, conf.WhatsAppNotificationGroup) {
+					shouldCensorData = false
+				}
+
 				log.Info("Fetching activity summary for day ", day)
-				summary, err := pegassClient.GetActivityOnDay(day, SAMU)
+				summary, err := pegassClient.GetActivityOnDay(day, SAMU, shouldCensorData)
 				if err != nil {
 					return err
 				}
@@ -250,8 +256,8 @@ func main() {
 				if conf.WhatsAppNotificationGroup == "" {
 					return fmt.Errorf("no WhatsApp group Id provided. Skipping WhatsApp notification")
 				}
-				whatsAppClient := whatsapp.NewClient()
 				jid, err := types.ParseJID(conf.WhatsAppNotificationGroup)
+				whatsAppClient := whatsapp.NewClient()
 				if err != nil {
 					return err
 				}
@@ -285,7 +291,7 @@ func main() {
 		{
 			Name: "start-bot",
 			Action: func(c *cli.Context) error {
-				_, err := initClient()
+				config, err := initClient()
 				if err != nil {
 					return err
 				}
@@ -296,11 +302,13 @@ func main() {
 					chatClient:   &whatsAppClient,
 				}
 				whatsAppClient.SetMessageCallback(func(senderName string, senderId types.JID, chatId types.JID, content string) {
-					log.Infof("Received message from '%s': %s", senderName, content)
-					var recipient = senderId
-					if chatId != (types.JID{}) {
-						recipient = chatId
+					if !isGroupOwnedByCRF(config.WhatsAppBotGroups, chatId.String()) {
+						// Security: only whitelisted groups are able to use bot features
+						return
 					}
+					log.Infof("Received message from '%s': %s", senderName, content)
+
+					var recipient = chatId
 					lowerMessage := strings.ToLower(content)
 
 					if strings.HasPrefix(lowerMessage, "!psr") {
@@ -336,4 +344,13 @@ func parseConfig() Config {
 		log.Fatal("Failed to parse application configuration file", err)
 	}
 	return configData
+}
+
+func isGroupOwnedByCRF(allowedGroups []string, groupId string) bool {
+	for _, allowedId := range allowedGroups {
+		if allowedId == groupId {
+			return true
+		}
+	}
+	return false
 }
