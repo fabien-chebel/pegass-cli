@@ -315,6 +315,12 @@ func main() {
 					var recipient = chatId
 					lowerMessage := strings.ToLower(content)
 
+					err = pegassClient.Authenticate()
+					if err != nil {
+						log.Errorf("failed to authenticate to pegass: '%s'", err.Error())
+						return
+					}
+
 					if strings.HasPrefix(lowerMessage, "!psr") {
 						botService.SendActivitySummary(recipient, SAMU, 3)
 					} else if strings.HasPrefix(lowerMessage, "!bspp") {
