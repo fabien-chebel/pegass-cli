@@ -315,7 +315,7 @@ func main() {
 					var recipient = chatId
 					lowerMessage := strings.ToLower(content)
 
-					err = pegassClient.Authenticate()
+					err = pegassClient.AuthenticateIfNecessary()
 					if err != nil {
 						log.Errorf("failed to authenticate to pegass: '%s'", err.Error())
 						return
