@@ -35,7 +35,7 @@ const (
 
 type PegassClient struct {
 	cookieJar     *cookiejar.Jar
-	httpClient    http.Client
+	httpClient    *http.Client
 	structures    map[int]string
 	Username      string
 	Password      string
@@ -50,7 +50,7 @@ func (p *PegassClient) init() error {
 			return fmt.Errorf("failed to create cookie jar: %w", err)
 		}
 	}
-	p.httpClient = http.Client{
+	p.httpClient = &http.Client{
 		Jar: p.cookieJar,
 	}
 	return nil
@@ -89,7 +89,7 @@ func (p *PegassClient) kickOffAuthentication(username string, password string) (
 	return passwordAuthResponse, nil
 }
 
-func (p PegassClient) obtainOktaSessionToken(factorId string, mfaCode string, stateToken string) (string, error) {
+func (p *PegassClient) obtainOktaSessionToken(factorId string, mfaCode string, stateToken string) (string, error) {
 	payloadBuffer := new(bytes.Buffer)
 	mfaRequest := redcross.MFAAuthRequest{
 		PassCode:   mfaCode,
@@ -272,7 +272,28 @@ func (p *PegassClient) ReAuthenticate() error {
 	return nil
 }
 
-func (p PegassClient) GetCurrentUser() (redcross.GestionDesDroits, error) {
+func (p *PegassClient) AuthenticateIfNecessary() error {
+	if !p.shouldReAuthenticate() {
+		return nil
+	}
+	log.Info("previous authentication ticket expired. application will re-authenticate to pegass")
+	p.cookieJar = nil
+
+	return p.Authenticate()
+}
+
+func (p *PegassClient) shouldReAuthenticate() bool {
+	response, err := p.httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/gestiondesdroits")
+	if err != nil {
+		log.Warnf("reauthenticate check request failed: '%s'", err.Error())
+		return true
+	}
+	defer response.Body.Close()
+
+	return response.StatusCode != http.StatusOK
+}
+
+func (p *PegassClient) GetCurrentUser() (redcross.GestionDesDroits, error) {
 	var user = redcross.GestionDesDroits{}
 	err := p.init()
 	if err != nil {
@@ -293,7 +314,7 @@ func (p PegassClient) GetCurrentUser() (redcross.GestionDesDroits, error) {
 	return user, nil
 }
 
-func (p PegassClient) GetStatsForUser(nivol string) (redcross.StatsBenevole, error) {
+func (p *PegassClient) GetStatsForUser(nivol string) (redcross.StatsBenevole, error) {
 	var stats = redcross.StatsBenevole{}
 	err := p.init()
 	if err != nil {
@@ -319,7 +340,7 @@ func (p PegassClient) GetStatsForUser(nivol string) (redcross.StatsBenevole, err
 	return stats, nil
 }
 
-func (p PegassClient) GetUserDetails(nivol string) (redcross.Utilisateur, error) {
+func (p *PegassClient) GetUserDetails(nivol string) (redcross.Utilisateur, error) {
 	var user = redcross.Utilisateur{}
 	err := p.init()
 	if err != nil {
@@ -342,7 +363,7 @@ func (p PegassClient) GetUserDetails(nivol string) (redcross.Utilisateur, error)
 	return user, nil
 }
 
-func (p PegassClient) GetDispatchers() ([]redcross.Utilisateur, error) {
+func (p *PegassClient) GetDispatchers() ([]redcross.Utilisateur, error) {
 	const DISPATCHER_ROLE_ID = "18"
 	err := p.init()
 	if err != nil {
@@ -402,7 +423,7 @@ func (p PegassClient) GetDispatchers() ([]redcross.Utilisateur, error) {
 
 }
 
-func (p PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, error) {
+func (p *PegassClient) GetActivityStats() (map[string]redcross.RegulationStats, error) {
 	err := p.init()
 	if err != nil {
 		return nil, err
@@ -537,7 +558,7 @@ func (p *PegassClient) GetMainMoyenComForUser(nivol string) (string, error) {
 	return "", nil
 }
 
-func (p PegassClient) GetUsersForRole(role redcross.Role) ([]redcross.Utilisateur, error) {
+func (p *PegassClient) GetUsersForRole(role redcross.Role) ([]redcross.Utilisateur, error) {
 	err := p.init()
 	if err != nil {
 		return nil, err
@@ -618,7 +639,7 @@ func (p *PegassClient) GetAllStructuresForDepartment(department string) ([]int, 
 	return ids, nil
 }
 
-func (p PegassClient) GetStructuresForDepartment(department string) (map[int]string, error) {
+func (p *PegassClient) GetStructuresForDepartment(department string) (map[int]string, error) {
 	err := p.init()
 	if err != nil {
 		return nil, err
@@ -646,7 +667,7 @@ func (p PegassClient) GetStructuresForDepartment(department string) (map[int]str
 	return dict, nil
 }
 
-func (p PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]redcross.Utilisateur, error) {
+func (p *PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]redcross.Utilisateur, error) {
 	err := p.init()
 	if err != nil {
 		return nil, err
@@ -715,7 +736,7 @@ func (p PegassClient) GetUsersForTrainingRole(role redcross.Role) ([]redcross.Ut
 	return users, nil
 }
 
-func (p PegassClient) FindRoleByName(roleName string) (redcross.Role, error) {
+func (p *PegassClient) FindRoleByName(roleName string) (redcross.Role, error) {
 	var roles []redcross.Role
 
 	err := p.init()
