@@ -274,6 +274,7 @@ func (p *PegassClient) ReAuthenticate() error {
 
 func (p *PegassClient) AuthenticateIfNecessary() error {
 	if !p.shouldReAuthenticate() {
+		log.Info("shouldReAuthenticated returned false")
 		return nil
 	}
 	log.Info("previous authentication ticket expired. application will re-authenticate to pegass")
@@ -290,6 +291,7 @@ func (p *PegassClient) shouldReAuthenticate() bool {
 	}
 	defer response.Body.Close()
 
+	log.Infof("Call to /gestiondesdroits endpoint returned response with code '%d' and headers '%s'", response.StatusCode, response.Header)
 	return response.StatusCode != http.StatusOK
 }
 
