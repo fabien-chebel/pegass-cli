@@ -42,6 +42,7 @@ func main() {
 	app := cli.NewApp()
 	app.Name = "Pegass CLI"
 	app.Usage = "Interact with Red Cross's Pegass web app through the CLI"
+	app.Version = "1.4.1"
 
 	app.Commands = []cli.Command{
 		{
