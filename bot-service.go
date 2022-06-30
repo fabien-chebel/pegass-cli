@@ -36,7 +36,15 @@ func (b *BotService) SendActivitySummary(recipient types.JID, kind ActivityKind,
 		summary, err := b.pegassClient.GetActivityOnDay(day, kind, false)
 		if err != nil {
 			log.Errorf("failed to generate activity summary for day '%s' and kind '%d'. error='%s'", day, kind, err.Error())
+			err := b.chatClient.SendMessage("Une erreur s'est produite lors de la génération de l'état du réseau. Veuillez réessayer plus tard", recipient)
+			if err != nil {
+				log.Errorf("failed to notify user that their request could not be processed. Error:'%s'", err.Error())
+			}
 			return
+		}
+
+		if summary == "" {
+			summary = "Aucune activité trouvée"
 		}
 
 		switch i {
