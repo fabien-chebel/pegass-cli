@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const APP_VERSION = "1.5.0"
+
 var pegassClient PegassClient
 
 func initClient() (Config, error) {
@@ -42,7 +44,7 @@ func main() {
 	app := cli.NewApp()
 	app.Name = "Pegass CLI"
 	app.Usage = "Interact with Red Cross's Pegass web app through the CLI"
-	app.Version = "1.4.1"
+	app.Version = APP_VERSION
 
 	app.Commands = []cli.Command{
 		{
