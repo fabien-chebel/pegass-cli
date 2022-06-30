@@ -284,7 +284,14 @@ func (p *PegassClient) AuthenticateIfNecessary() error {
 }
 
 func (p *PegassClient) shouldReAuthenticate() bool {
-	response, err := p.httpClient.Get("https://pegass.croix-rouge.fr/crf/rest/gestiondesdroits")
+	noRedirectHttpClient := &http.Client{
+		Jar: p.cookieJar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	response, err := noRedirectHttpClient.Get("https://pegass.croix-rouge.fr/crf/rest/gestiondesdroits")
 	if err != nil {
 		log.Warnf("reauthenticate check request failed: '%s'", err.Error())
 		return true
