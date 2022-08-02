@@ -786,6 +786,7 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 	var chiefContactDetails string
 	var hasFormerFirstResponder bool
 
+	var dispatcherAssociation string
 	var minorCount, chiefCount, driverCount, pse2Count, pse1Count, traineeCount, dispatcherCount, radioOperatorCount, unknownCount int
 	for _, inscription := range inscriptions {
 		userDetails, err := p.GetUserDetails(inscription.Utilisateur.ID)
@@ -823,6 +824,12 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 			hasFormerFirstResponder = hasFormerFirstResponder || isFormerFirstResponder
 		} else if inscription.Type == "COMP" && (inscription.Role == "18" || inscription.Role == "80") {
 			dispatcherCount++
+			assoc, ok := EXTERNAL_ASSOCIATIONS[inscription.Utilisateur.ID]
+			if ok {
+				dispatcherAssociation = assoc
+			} else {
+				dispatcherAssociation = "CRF"
+			}
 		} else if inscription.Type == "FORM" && inscription.Role == "47" {
 			radioOperatorCount++
 		} else {
@@ -843,7 +850,11 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 	}
 
 	if activity.Libelle == "REGULATION" {
-		buf.WriteString(fmt.Sprintf("[%d PAX]\n\t\t%d ARS, %d OPR, %d Stagiaire", len(inscriptions), dispatcherCount, radioOperatorCount, traineeCount))
+		if dispatcherAssociation != "" {
+			buf.WriteString(fmt.Sprintf("[%d PAX][%s]\n\t\t%d ARS, %d OPR, %d Stagiaire", len(inscriptions), dispatcherAssociation, dispatcherCount, radioOperatorCount, traineeCount))
+		} else {
+			buf.WriteString(fmt.Sprintf("[%d PAX]\n\t\t%d ARS, %d OPR, %d Stagiaire", len(inscriptions), dispatcherCount, radioOperatorCount, traineeCount))
+		}
 	} else {
 		buf.WriteString(fmt.Sprintf("[%d PAX]", len(inscriptions)))
 	}
@@ -1005,6 +1016,8 @@ func (p *PegassClient) IsFormerFirstResponder(nivol string) (bool, error) {
 
 var EXTERNAL_ASSOCIATIONS = map[string]string{
 	"01100009671G": "PCPS",
+	"01100009672H": "Malte",
+	"01100039741E": "FFSS",
 }
 
 func mapStatusToEmoji(status string) string {
