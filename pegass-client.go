@@ -784,6 +784,7 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 	inscriptions := redcross.InscriptionList{}
 	err = json.NewDecoder(response.Body).Decode(&inscriptions)
 	var chiefContactDetails string
+	var hasFormerFirstResponder bool
 
 	var minorCount, chiefCount, driverCount, pse2Count, pse1Count, traineeCount, dispatcherCount, radioOperatorCount, unknownCount int
 	for _, inscription := range inscriptions {
@@ -815,6 +816,11 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 			pse1Count++
 		} else if inscription.Role == "PARTICIPANT" {
 			traineeCount++
+			isFormerFirstResponder, err := p.IsFormerFirstResponder(inscription.Utilisateur.ID)
+			if err != nil {
+				log.Warnf("failed to check whether user '%s' used to be a first responder: %v", inscription.Utilisateur.ID, err)
+			}
+			hasFormerFirstResponder = hasFormerFirstResponder || isFormerFirstResponder
 		} else if inscription.Type == "COMP" && (inscription.Role == "18" || inscription.Role == "80") {
 			dispatcherCount++
 		} else if inscription.Type == "FORM" && inscription.Role == "47" {
@@ -854,6 +860,9 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 		}
 		if pse2Count == 0 {
 			buf.WriteString(fmt.Sprintf("\n\t\t⚠️ Aucun PSE2"))
+		}
+		if hasFormerFirstResponder {
+			buf.WriteString(fmt.Sprintf("\n\t\t⚠️ Observateur PSE non-recyclé"))
 		}
 	}
 
@@ -952,6 +961,46 @@ func (p *PegassClient) GetActivityOnDay(day string, kind ActivityKind, shouldCen
 	}
 
 	return buffer.String(), nil
+}
+
+func (p *PegassClient) GetTrainingsForUser(nivol string) ([]redcross.UserTraining, error) {
+	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/formationutilisateur")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse url to pegass: %v", err)
+	}
+
+	query := parse.Query()
+	query.Add("utilisateur", nivol)
+	parse.RawQuery = query.Encode()
+
+	request, err := p.httpClient.Get(parse.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user trainings: %v", err)
+	}
+	defer request.Body.Close()
+
+	var trainings []redcross.UserTraining
+	err = json.NewDecoder(request.Body).Decode(&trainings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize training list: %v", err)
+	}
+
+	return trainings, nil
+}
+
+func (p *PegassClient) IsFormerFirstResponder(nivol string) (bool, error) {
+	trainings, err := p.GetTrainingsForUser(nivol)
+	if err != nil {
+		return false, err
+	}
+
+	for _, t := range trainings {
+		if (t.Formation.Code == "PSE2" || t.Formation.Code == "PSE1") && !t.Formation.Recyclage {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 var EXTERNAL_ASSOCIATIONS = map[string]string{

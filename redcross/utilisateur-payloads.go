@@ -56,3 +56,15 @@ type Coordonnees struct {
 type RegulationStats struct {
 	OPR, Eval, Regul int
 }
+
+type UserTraining struct {
+	ID        string `json:"id"`
+	Formation struct {
+		ID        string `json:"id"`
+		Code      string `json:"code"`
+		Libelle   string `json:"libelle"`
+		Recyclage bool   `json:"recyclage"`
+	} `json:"formation"`
+	DateObtention string `json:"dateObtention"`
+	DateRecyclage string `json:"dateRecyclage,omitempty"`
+}
