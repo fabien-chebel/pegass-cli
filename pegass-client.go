@@ -804,9 +804,10 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 		if inscription.Type == "NOMI" && (inscription.Role == "254" || inscription.Role == "255") {
 			// CI RESEAU || CI BSPP
 			chiefCount++
-			if phoneNumber != "" {
-				chiefContactDetails = fmt.Sprintf("📞 %s %s %s", userDetails.Prenom, userDetails.Nom, phoneNumber)
+			if phoneNumber == "" {
+				phoneNumber = "(Inconnu)"
 			}
+			chiefContactDetails = fmt.Sprintf("📞 %s %s %s", userDetails.Prenom, userDetails.Nom, phoneNumber)
 		} else if inscription.Type == "COMP" && inscription.Role == "10" {
 			// CH
 			driverCount++
