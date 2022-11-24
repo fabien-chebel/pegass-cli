@@ -787,7 +787,7 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 	var hasFormerFirstResponder bool
 
 	var dispatcherAssociation string
-	var minorCount, chiefCount, driverCount, pse2Count, pse1Count, traineeCount, dispatcherCount, radioOperatorCount, unknownCount int
+	var minorCount, chiefCount, driverCount, pse2Count, pse1Count, traineeCount, dispatcherCount, dispatcherTrainerCount, radioOperatorCount, unknownCount int
 	for _, inscription := range inscriptions {
 		userDetails, err := p.GetUserDetails(inscription.Utilisateur.ID)
 		if err != nil {
@@ -823,13 +823,17 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 				log.Warnf("failed to check whether user '%s' used to be a first responder: %v", inscription.Utilisateur.ID, err)
 			}
 			hasFormerFirstResponder = hasFormerFirstResponder || isFormerFirstResponder
-		} else if inscription.Type == "COMP" && (inscription.Role == "18" || inscription.Role == "80") {
+		} else if inscription.Type == "COMP" && (inscription.Role == "18" || inscription.Role == "80" || inscription.Role == "63") {
 			dispatcherCount++
 			assoc, ok := EXTERNAL_ASSOCIATIONS[inscription.Utilisateur.ID]
 			if ok {
 				dispatcherAssociation = assoc
 			} else {
 				dispatcherAssociation = "CRF"
+			}
+
+			if inscription.Role == "63" {
+				dispatcherTrainerCount++
 			}
 		} else if inscription.Type == "FORM" && inscription.Role == "47" {
 			radioOperatorCount++
@@ -855,6 +859,9 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 			buf.WriteString(fmt.Sprintf("[%d PAX][%s]\n\t\t%d ARS, %d OPR, %d Stagiaire", len(inscriptions), dispatcherAssociation, dispatcherCount, radioOperatorCount, traineeCount))
 		} else {
 			buf.WriteString(fmt.Sprintf("[%d PAX]\n\t\t%d ARS, %d OPR, %d Stagiaire", len(inscriptions), dispatcherCount, radioOperatorCount, traineeCount))
+		}
+		if dispatcherTrainerCount > 0 {
+			buf.WriteString("\n\t\tℹ️Evaluation régulateur")
 		}
 	} else {
 		buf.WriteString(fmt.Sprintf("[%d PAX]", len(inscriptions)))
