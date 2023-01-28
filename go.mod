@@ -7,8 +7,9 @@ require (
 	github.com/mdp/qrterminal/v3 v3.0.0
 	github.com/pquerna/otp v1.3.0
 	github.com/sirupsen/logrus v1.8.1
-	go.mau.fi/whatsmeow v0.0.0-20220629192020-6e4a9fb4bbe6
-	golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2
-	google.golang.org/protobuf v1.28.0
+	go.mau.fi/whatsmeow v0.0.0-20230126153218-e778453e6538
+	golang.org/x/crypto v0.5.0 // indirect
+	golang.org/x/net v0.5.0
+	google.golang.org/protobuf v1.28.1
 	gopkg.in/urfave/cli.v1 v1.20.0
 )

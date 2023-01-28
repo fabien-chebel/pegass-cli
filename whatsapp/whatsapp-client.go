@@ -60,7 +60,7 @@ func (w *WhatsAppClient) SendMessage(message string, groupId types.JID) error {
 		return err
 	}
 
-	_, err = w.client.SendMessage(context.Background(), groupId, "", &waProto.Message{Conversation: proto.String(message)})
+	_, err = w.client.SendMessage(context.Background(), groupId, &waProto.Message{Conversation: proto.String(message)})
 	if err != nil {
 		return err
 	}
