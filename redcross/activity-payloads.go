@@ -119,14 +119,31 @@ func (a ByActivity) Less(i, j int) bool {
 	var first = a[i]
 	var second = a[j]
 
-	if ACTIVITY_MAP[first.Libelle] == ACTIVITY_MAP[second.Libelle] {
+	firstIdx, firstKnown := ACTIVITY_MAP[first.Libelle]
+	secondIdx, secondKnown := ACTIVITY_MAP[second.Libelle]
+
+	// First, check whether we can map activities to known activity names.
+	// If any of the activity is not known, using the following rules:
+	// - Unknown activities are ranked higher than known activities
+	// - Unknown activities are compared using String natural order
+	if !firstKnown || !secondKnown {
+		if !firstKnown && !secondKnown {
+			return first.Libelle < second.Libelle
+		} else if !firstKnown {
+			return false
+		} else {
+			return true
+		}
+	}
+
+	if firstIdx == secondIdx {
 		if len(first.SeanceList) > 0 && len(second.SeanceList) > 0 {
 			return time.Time(first.SeanceList[0].Debut).Before(time.Time(second.SeanceList[0].Debut))
 		} else {
 			return true
 		}
 	} else {
-		return ACTIVITY_MAP[first.Libelle] < ACTIVITY_MAP[second.Libelle]
+		return firstIdx < secondIdx
 	}
 
 }
