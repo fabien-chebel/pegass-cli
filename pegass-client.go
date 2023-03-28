@@ -888,22 +888,26 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 	return buf.String(), nil
 }
 
-func (p *PegassClient) GetActivityOnDay(day string, kind ActivityKind, shouldCensorData bool) (string, error) {
+func (p *PegassClient) FindActivitiesOnDay(day string, kind ActivityKind, shouldCensorData bool) (string, error) {
 	err := p.init()
 	if err != nil {
 		return "", err
 	}
 
-	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/activite")
+	parse, err := url.Parse("https://pegass.croix-rouge.fr/crf/rest/seance")
 	if err != nil {
 		return "", fmt.Errorf("failed to parse url to pegass: %w", err)
 	}
 
 	query := parse.Query()
+	query.Add("action", "65")
 	query.Add("debut", day)
 	query.Add("fin", day)
-	query.Add("creationEnMasse", "true")
-	query.Add("structureCreateur", "97")
+	query.Add("page", "0")
+	query.Add("pageInfo", "true")
+	query.Add("size", "100")
+	query.Add("zoneGeoId", "92")
+	query.Add("zoneGeoType", "departement")
 
 	parse.RawQuery = query.Encode()
 
@@ -913,13 +917,50 @@ func (p *PegassClient) GetActivityOnDay(day string, kind ActivityKind, shouldCen
 	}
 	defer request.Body.Close()
 
-	var activities []redcross.Activity
-	err = json.NewDecoder(request.Body).Decode(&activities)
+	var seanceList = redcross.SeanceList{}
+	err = json.NewDecoder(request.Body).Decode(&seanceList)
 	if err != nil {
-		return "", fmt.Errorf("failed to deserialize activity list: %w", err)
+		return "", fmt.Errorf("failed to deserialize seance list: %w", err)
 	}
-	sort.Sort(redcross.ByActivity(activities))
 
+	var activities []redcross.Activity
+	for _, seance := range seanceList.Content {
+		activity, err := p.fetchActivityById(seance.Activite.ID)
+		if err != nil {
+			log.Warnf("unable to map seance '%s' to activity: %s", seance.ID, err)
+		}
+		activities = append(activities, activity)
+	}
+
+	summary, err := p.summarize(activities, kind, shouldCensorData)
+	if err != nil {
+		return "", fmt.Errorf("failed to summarize activities: %w", err)
+	}
+
+	return summary, nil
+
+}
+
+func (p *PegassClient) fetchActivityById(activityId string) (redcross.Activity, error) {
+	activity := redcross.Activity{}
+
+	url := fmt.Sprintf("https://pegass.croix-rouge.fr/crf/rest/activite/%s", activityId)
+	request, err := p.httpClient.Get(url)
+	if err != nil {
+		return activity, fmt.Errorf("failed to search for activities: %w", err)
+	}
+	defer request.Body.Close()
+
+	err = json.NewDecoder(request.Body).Decode(&activity)
+	if err != nil {
+		return activity, fmt.Errorf("failed to deserialize pegass activity: %w", err)
+	}
+
+	return activity, nil
+}
+
+func (p *PegassClient) summarize(activities []redcross.Activity, kind ActivityKind, shouldCensorData bool) (string, error) {
+	sort.Sort(redcross.ByActivity(activities))
 	department, err := p.GetStructuresForDepartment("92")
 	if err != nil {
 		return "", err

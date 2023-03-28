@@ -33,7 +33,7 @@ func (b *BotService) SendActivitySummary(recipient types.JID, kind ActivityKind,
 
 		day := time.Now().AddDate(0, 0, i).Format("2006-01-02")
 		log.Infof("fetching activity summary for day '%s' and kind '%#v'", day, kind)
-		summary, err := b.pegassClient.GetActivityOnDay(day, kind, false)
+		summary, err := b.pegassClient.FindActivitiesOnDay(day, kind, false)
 		if err != nil {
 			log.Errorf("failed to generate activity summary for day '%s' and kind '%d'. error='%s'", day, kind, err.Error())
 			err := b.chatClient.SendMessage("Une erreur s'est produite lors de la génération de l'état du réseau. Veuillez réessayer plus tard", recipient)

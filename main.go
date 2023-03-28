@@ -249,7 +249,7 @@ func main() {
 				}
 
 				log.Info("Fetching activity summary for day ", day)
-				summary, err := pegassClient.GetActivityOnDay(day, SAMU, shouldCensorData)
+				summary, err := pegassClient.FindActivitiesOnDay(day, SAMU, shouldCensorData)
 				if err != nil {
 					return err
 				}
