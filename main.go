@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/fabien-chebel/pegass-cli/whatsapp"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/glebarez/go-sqlite"
 	log "github.com/sirupsen/logrus"
 	"go.mau.fi/whatsmeow/types"
 	"gopkg.in/urfave/cli.v1"
@@ -276,9 +276,12 @@ func main() {
 			Name:  "register-chat-device",
 			Usage: "Register whats app device locally",
 			Action: func(c *cli.Context) error {
+				log.Infof("Starting what's app client")
 				whatsAppClient := whatsapp.NewClient()
+				log.Infof("Registering device")
 				err := whatsAppClient.RegisterDevice()
 				if err != nil {
+					log.Infof("Failed to register device: %s", err.Error())
 					return err
 				}
 				return nil
