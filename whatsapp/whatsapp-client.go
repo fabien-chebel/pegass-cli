@@ -30,7 +30,7 @@ func NewClient() WhatsAppClient {
 func (w *WhatsAppClient) RegisterDevice() error {
 	err := w.initClient()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	if w.client.Store.ID == nil {
@@ -73,7 +73,7 @@ func (w *WhatsAppClient) initClient() error {
 		minLogLevel = "DEBUG"
 	}
 	dbLog := waLog.Stdout("Database", minLogLevel, true)
-	container, err := sqlstore.New("sqlite3", "file:pegass.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New("sqlite", "file:pegass.db?_pragma=foreign_keys(1)", dbLog)
 	if err != nil {
 		return err
 	}
