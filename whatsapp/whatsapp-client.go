@@ -73,11 +73,12 @@ func (w *WhatsAppClient) initClient() error {
 		minLogLevel = "DEBUG"
 	}
 	dbLog := waLog.Stdout("Database", minLogLevel, true)
-	container, err := sqlstore.New("sqlite", "file:pegass.db?_pragma=foreign_keys(1)", dbLog)
+	ctx := context.Background()
+	container, err := sqlstore.New(ctx, "sqlite", "file:pegass.db?_pragma=foreign_keys(1)", dbLog)
 	if err != nil {
 		return err
 	}
-	device, err := container.GetFirstDevice()
+	device, err := container.GetFirstDevice(ctx)
 	if err != nil {
 		return err
 	}
