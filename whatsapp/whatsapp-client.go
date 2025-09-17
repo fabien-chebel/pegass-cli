@@ -110,7 +110,7 @@ func (w *WhatsAppClient) PrintGroupList() error {
 	if err != nil {
 		return err
 	}
-	groups, err := w.client.GetJoinedGroups()
+	groups, err := w.client.GetJoinedGroups(context.Background())
 	if err != nil {
 		return err
 	}
