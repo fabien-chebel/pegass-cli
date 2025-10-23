@@ -144,7 +144,13 @@ func (w *WhatsAppClient) eventHandler(evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
 		if w.onMessageReceived != nil {
-			w.onMessageReceived(v.Info.PushName, v.Info.Sender, v.Info.Chat, v.Message.GetConversation(), v.Info.Timestamp)
+			msg := v.Message.GetConversation()
+			if msg == "" {
+				if extMsg := v.Message.GetExtendedTextMessage(); extMsg != nil && extMsg.Text != nil {
+					msg = *extMsg.Text
+				}
+			}
+			w.onMessageReceived(v.Info.PushName, v.Info.Sender, v.Info.Chat, msg, v.Info.Timestamp)
 		}
 	case *events.Disconnected:
 		log.Warn("WhatsApp client was disconnected")
