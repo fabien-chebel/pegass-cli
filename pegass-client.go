@@ -801,29 +801,29 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 			minorCount++
 		}
 
-		if inscription.Type == "NOMI" && (inscription.Role == "254" || inscription.Role == "255") {
+		if inscription.Role == "110" || inscription.Role == "111" {
 			// CI RESEAU || CI BSPP
 			chiefCount++
 			if phoneNumber == "" {
 				phoneNumber = "(Inconnu)"
 			}
 			chiefContactDetails = fmt.Sprintf("📞 %s %s %s", userDetails.Prenom, userDetails.Nom, phoneNumber)
-		} else if inscription.Type == "COMP" && inscription.Role == "10" {
+		} else if inscription.Role == "5" {
 			// CH
 			driverCount++
-		} else if inscription.Type == "FORM" && inscription.Role == "167" {
+		} else if inscription.Role == "219" {
 			// PSE2
 			pse2Count++
-		} else if inscription.Type == "FORM" && inscription.Role == "166" {
+		} else if inscription.Role == "215" {
 			pse1Count++
-		} else if inscription.Role == "PARTICIPANT" {
+		} else if inscription.Role == "200" { // "PARTICIPANT"
 			traineeCount++
 			isFormerFirstResponder, err := p.IsFormerFirstResponder(inscription.Utilisateur.ID)
 			if err != nil {
 				log.Warnf("failed to check whether user '%s' used to be a first responder: %v", inscription.Utilisateur.ID, err)
 			}
 			hasFormerFirstResponder = hasFormerFirstResponder || isFormerFirstResponder
-		} else if inscription.Type == "COMP" && (inscription.Role == "18" || inscription.Role == "80" || inscription.Role == "63") {
+		} else if inscription.Role == "227" || inscription.Role == "134" {
 			dispatcherCount++
 			assoc, ok := EXTERNAL_ASSOCIATIONS[inscription.Utilisateur.ID]
 			if ok {
@@ -832,17 +832,16 @@ func (p *PegassClient) lintActivity(activity redcross.Activity) (string, error) 
 				dispatcherAssociation = "CRF"
 			}
 
-			if inscription.Role == "63" {
+			if inscription.Role == "134" {
 				dispatcherTrainerCount++
 			}
-		} else if inscription.Type == "FORM" && inscription.Role == "47" {
+		} else if inscription.Role == "198" {
 			radioOperatorCount++
 		} else {
 			log.WithFields(log.Fields{
 				"libelle":    activity.Libelle,
 				"activityId": activity.ID,
 				"role":       inscription.Role,
-				"roleType":   inscription.Type,
 				"nivol":      inscription.Utilisateur.ID,
 			}).Warnf("came accross unknown role for activity '%s' and start date '%s'", activity.Libelle, time.Time(activity.SeanceList[0].Debut))
 			unknownCount++
