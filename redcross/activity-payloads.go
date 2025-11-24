@@ -78,8 +78,6 @@ type InscriptionList []struct {
 	Fin         string      `json:"fin"`
 	Statut      string      `json:"statut"`
 	Role        string      `json:"role"`
-	Type        string      `json:"type"`
-	IsMultiple  bool        `json:"isMultiple"`
 }
 
 type Activity struct {
